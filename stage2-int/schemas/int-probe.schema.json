@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stage2-int/schemas/int-probe.schema.json",
+  "title": "INT probe path",
+  "type": "object",
+  "required": [
+    "probe_id",
+    "slice_index",
+    "source",
+    "sink",
+    "path",
+    "link_ids",
+    "planning_algorithm"
+  ],
+  "properties": {
+    "probe_id": { "type": "string" },
+    "slice_index": { "type": "integer", "minimum": 0 },
+    "source": { "type": "string" },
+    "sink": { "type": "string" },
+    "path": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "link_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "path_length": { "type": "integer", "minimum": 0 },
+    "covered_link_count": { "type": "integer", "minimum": 0 },
+    "planning_algorithm": {
+      "enum": ["traffic-int", "path-original", "path-balance"]
+    }
+  },
+  "additionalProperties": true
+}
+

@@ -1,0 +1,25 @@
+{
+  "schema_version": "stage2-path-planning-policy-v1",
+  "active_policy": "traffic-int-mvp",
+  "policies": {
+    "traffic-int-mvp": {
+      "mode": "traffic-int",
+      "uses_business_routes": true,
+      "covers_all_active_isl": false
+    },
+    "path-original": {
+      "mode": "probe-int",
+      "algorithm": "topology-decomposition-euler",
+      "balance": false,
+      "target": "cover-all-active-isl"
+    },
+    "path-balance": {
+      "mode": "probe-int",
+      "algorithm": "topology-decomposition-euler",
+      "balance": true,
+      "segment_sorting": "ascending-length",
+      "target": "cover-all-active-isl-with-balanced-paths"
+    }
+  }
+}
+

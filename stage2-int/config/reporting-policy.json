@@ -1,0 +1,32 @@
+{
+  "schema_version": "stage2-reporting-policy-v1",
+  "active_policy": "offline-generated",
+  "policies": {
+    "offline-generated": {
+      "mode": "no-downlink-model",
+      "description": "MVP only generates INT reports at sink nodes; ground downlink is evaluated later."
+    },
+    "single-ground-oam": {
+      "mode": "shortest-reporting-path",
+      "direct_linked_selection": "best-elevation",
+      "path_algorithm": "dijkstra",
+      "capacity_source": "ground_window_report_capacity",
+      "default_reconstruction_budget_bytes_per_slice": 65536,
+      "carry_over_undelivered_reports": true
+    },
+    "multi-ground-oam": {
+      "mode": "shortest-reporting-path",
+      "direct_linked_selection": "best-available-ground-window",
+      "path_algorithm": "dijkstra",
+      "capacity_source": "ground_window_report_capacity",
+      "default_reconstruction_budget_bytes_per_slice": 65536,
+      "carry_over_undelivered_reports": true
+    },
+    "constrained-ground-oam": {
+      "mode": "budget-limited-reconstruction",
+      "description": "Stress policy for checking that undelivered reports reduce reconstructed coverage.",
+      "default_reconstruction_budget_bytes_per_slice": 2048,
+      "carry_over_undelivered_reports": false
+    }
+  }
+}

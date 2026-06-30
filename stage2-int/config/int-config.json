@@ -1,0 +1,26 @@
+{
+  "schema_version": "stage2-int-config-v1",
+  "stage1_boundary": {
+    "model_is_black_box": true,
+    "runtime_may_read_global_truth": false,
+    "evaluation_may_read_global_truth": true
+  },
+  "modes": {
+    "traffic_int_enabled": true,
+    "probe_int_enabled": false,
+    "reporting_path_enabled": false,
+    "ground_reconstruction_enabled": true
+  },
+  "packet_model": {
+    "default_probe_payload_bytes": 64,
+    "default_hop_metadata_bytes": 96,
+    "default_report_header_bytes": 128,
+    "max_hop_records_per_packet": 64
+  },
+  "unknown_policy": {
+    "unobserved_node_state": "unknown",
+    "unobserved_link_state": "unknown",
+    "confidence_for_unknown": 0
+  }
+}
+

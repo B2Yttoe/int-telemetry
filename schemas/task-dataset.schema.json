@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://int-temerity.local/schemas/task-dataset.schema.json",
+  "title": "INT-Temerity Stage-1 Task Traffic Dataset",
+  "description": "CSV rows or JSON task objects that inject deterministic workload into the Walker/LEO operational simulation.",
+  "x-compatibleAliases": {
+    "task_id": ["id", "flow_id"],
+    "start_slice": ["slice", "start", "time"],
+    "duration_slices": ["duration", "duration_slice", "duration_time"],
+    "source": ["src"],
+    "target": ["dst", "destination"],
+    "node_id": ["node", "satellite_id"],
+    "compute_units": ["compute", "cpu"],
+    "gpu_units": ["gpu"],
+    "memory_gb": ["memory", "mem_gb"],
+    "storage_gb": ["storage", "disk_gb"],
+    "traffic_mbps": ["traffic", "bandwidth_mbps"],
+    "task_type": ["type", "service_type"]
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable task or flow identifier. Duplicate IDs are allowed only as warnings and should be avoided for reproducible experiments."
+    },
+    "time": {
+      "type": ["string", "number"],
+      "description": "Optional human-readable start time. Accepted forms include a slice index, T0/T1, or minute text such as 15min."
+    },
+    "start_slice": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "First simulation time slice where this task becomes active."
+    },
+    "duration_slices": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of time slices during which the task remains active."
+    },
+    "source": {
+      "type": "string",
+      "pattern": "^P\\d{2}-S\\d{2}$",
+      "description": "Source satellite node for routed traffic tasks."
+    },
+    "target": {
+      "type": "string",
+      "pattern": "^P\\d{2}-S\\d{2}$",
+      "description": "Target satellite node for routed traffic tasks."
+    },
+    "node_id": {
+      "type": "string",
+      "pattern": "^P\\d{2}-S\\d{2}$",
+      "description": "Single satellite node that receives local compute/storage work."
+    },
+    "compute_units": {
+      "type": "number",
+      "minimum": 0,
+      "description": "CPU workload units consumed by the task while active."
+    },
+    "gpu_units": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Optional GPU workload units consumed by the task while active."
+    },
+    "memory_gb": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Task memory footprint in GB."
+    },
+    "storage_gb": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Task storage footprint in GB."
+    },
+    "traffic_mbps": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Traffic demand injected into the shortest-path route in Mbps."
+    },
+    "priority": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Task priority. Higher values receive capacity first when multiple routed tasks contend for a congested link; path selection remains shortest-path."
+    },
+    "task_type": {
+      "type": "string",
+      "enum": ["compute", "routing", "downlink", "telemetry", "mixed", "background", "burst"],
+      "description": "Task label such as compute, mixed, routing, telemetry, burst, background, or downlink. telemetry tasks add source-side telemetry sampling pressure after carried traffic is delivered; downlink tasks add target-side report/cache pressure."
+    }
+  },
+  "required": ["task_id", "start_slice", "duration_slices"],
+  "oneOf": [
+    {
+      "required": ["source", "target"],
+      "not": {
+        "required": ["node_id"]
+      }
+    },
+    {
+      "required": ["node_id"],
+      "not": {
+        "anyOf": [
+          {
+            "required": ["source"]
+          },
+          {
+            "required": ["target"]
+          }
+        ]
+      }
+    }
+  ],
+  "allOf": [
+    {
+      "if": {
+        "required": ["traffic_mbps"],
+        "properties": {
+          "traffic_mbps": {
+            "exclusiveMinimum": 0
+          }
+        }
+      },
+      "then": {
+        "required": ["source", "target"],
+        "not": {
+          "required": ["node_id"]
+        }
+      }
+    }
+  ],
+  "examples": [
+    {
+      "task_id": "standard-flow-01",
+      "start_slice": 2,
+      "duration_slices": 5,
+      "source": "P01-S01",
+      "target": "P05-S05",
+      "compute_units": 80,
+      "gpu_units": 0,
+      "memory_gb": 6,
+      "storage_gb": 10,
+      "traffic_mbps": 200,
+      "priority": 2,
+      "task_type": "mixed"
+    },
+    {
+      "task_id": "local-compute-01",
+      "start_slice": 8,
+      "duration_slices": 4,
+      "node_id": "P03-S02",
+      "compute_units": 180,
+      "gpu_units": 12,
+      "memory_gb": 4,
+      "storage_gb": 12,
+      "traffic_mbps": 0,
+      "priority": 1,
+      "task_type": "compute"
+    }
+  ]
+}

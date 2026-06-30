@@ -1,0 +1,156 @@
+{
+  "generated_at": "2026-06-26T11:16:07.818Z",
+  "dataset_schema": "schemas/task-dataset-file.schema.json",
+  "task_schema": "schemas/task-dataset.schema.json",
+  "csv_header": [
+    "task_id",
+    "time",
+    "start_slice",
+    "duration_slices",
+    "source",
+    "target",
+    "node_id",
+    "compute_units",
+    "gpu_units",
+    "memory_gb",
+    "storage_gb",
+    "traffic_mbps",
+    "priority",
+    "task_type"
+  ],
+  "profiles": [
+    {
+      "profile": "empty",
+      "file": "empty.csv",
+      "csv_file": "empty.csv",
+      "json_file": "empty.json",
+      "dataset_fingerprint": "d9de47b3",
+      "validation": {
+        "accepted": 0,
+        "warnings": [],
+        "errors": []
+      },
+      "totals": {
+        "tasks": 0,
+        "trafficMbps": 0,
+        "computeUnits": 0,
+        "memoryGb": 0,
+        "storageGb": 0
+      }
+    },
+    {
+      "profile": "low-load",
+      "file": "low-load.csv",
+      "csv_file": "low-load.csv",
+      "json_file": "low-load.json",
+      "dataset_fingerprint": "0ebf7b7e",
+      "validation": {
+        "accepted": 12,
+        "warnings": [],
+        "errors": []
+      },
+      "totals": {
+        "tasks": 12,
+        "trafficMbps": 1218,
+        "computeUnits": 96,
+        "memoryGb": 3,
+        "storageGb": 6
+      }
+    },
+    {
+      "profile": "normal",
+      "file": "normal.csv",
+      "csv_file": "normal.csv",
+      "json_file": "normal.json",
+      "dataset_fingerprint": "e875b03a",
+      "validation": {
+        "accepted": 24,
+        "warnings": [],
+        "errors": []
+      },
+      "totals": {
+        "tasks": 24,
+        "trafficMbps": 7903,
+        "computeUnits": 576,
+        "memoryGb": 12,
+        "storageGb": 24
+      }
+    },
+    {
+      "profile": "high-load",
+      "file": "high-load.csv",
+      "csv_file": "high-load.csv",
+      "json_file": "high-load.json",
+      "dataset_fingerprint": "84eceeb0",
+      "validation": {
+        "accepted": 48,
+        "warnings": [],
+        "errors": []
+      },
+      "totals": {
+        "tasks": 48,
+        "trafficMbps": 51996,
+        "computeUnits": 2304,
+        "memoryGb": 60,
+        "storageGb": 120
+      }
+    },
+    {
+      "profile": "hotspot",
+      "file": "hotspot.csv",
+      "csv_file": "hotspot.csv",
+      "json_file": "hotspot.json",
+      "dataset_fingerprint": "3ea865af",
+      "validation": {
+        "accepted": 36,
+        "warnings": [],
+        "errors": []
+      },
+      "totals": {
+        "tasks": 36,
+        "trafficMbps": 24710,
+        "computeUnits": 1008,
+        "memoryGb": 27,
+        "storageGb": 54
+      }
+    },
+    {
+      "profile": "burst",
+      "file": "burst.csv",
+      "csv_file": "burst.csv",
+      "json_file": "burst.json",
+      "dataset_fingerprint": "aade611b",
+      "validation": {
+        "accepted": 40,
+        "warnings": [],
+        "errors": []
+      },
+      "totals": {
+        "tasks": 40,
+        "trafficMbps": 51140,
+        "computeUnits": 720,
+        "memoryGb": 20,
+        "storageGb": 40
+      }
+    },
+    {
+      "profile": "long-duration",
+      "file": "long-duration.csv",
+      "csv_file": "long-duration.csv",
+      "json_file": "long-duration.json",
+      "dataset_fingerprint": "33f15ad1",
+      "validation": {
+        "accepted": 24,
+        "warnings": [],
+        "errors": []
+      },
+      "totals": {
+        "tasks": 24,
+        "trafficMbps": 7324,
+        "computeUnits": 432,
+        "memoryGb": 14.399999999999995,
+        "storageGb": 28.79999999999999
+      }
+    }
+  ]
+}

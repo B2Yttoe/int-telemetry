@@ -1,0 +1,50 @@
+{
+  "schema": "int-temerity-radar-calibrated-traffic-metadata/v1",
+  "generated_at": "2026-06-26T11:14:05.126Z",
+  "generator": "scripts/generateRadarCalibratedTraffic.mjs",
+  "snapshot": {
+    "path": "E:\\INT-Temerity\\data\\tle-snapshots\\celestrak-starlink-real-walker-8x8.json",
+    "source": "celestrak",
+    "group": "STARLINK",
+    "fingerprint": "ba85ff7c",
+    "selected_count": 64,
+    "planes": 8,
+    "satellites_per_plane": 8
+  },
+  "calibration_profile": {
+    "path": "E:\\INT-Temerity\\traffic-calibration\\cloudflare-radar-profile.json",
+    "profile_id": "cloudflare-radar-inspired-global-48-v1",
+    "data_mode": "public-statistical-calibration-template",
+    "not_raw_cloudflare_export": true,
+    "source_references": [
+      {
+        "name": "Cloudflare Radar overview",
+        "url": "https://developers.cloudflare.com/radar/",
+        "used_for": "Global Internet traffic, DNS, technology trend, and anonymized aggregate data source context."
+      },
+      {
+        "name": "Cloudflare Radar NetFlows",
+        "url": "https://developers.cloudflare.com/radar/investigate/netflows/",
+        "used_for": "Network traffic trend context across Cloudflare edge routers."
+      },
+      {
+        "name": "Cloudflare Radar traffic dashboard",
+        "url": "https://radar.cloudflare.com/traffic",
+        "used_for": "HTTP request class, content/API traffic, bot/human traffic, and traffic mix concepts."
+      }
+    ]
+  },
+  "output": {
+    "csv": "E:\\INT-Temerity\\examples\\datasets\\radar-calibrated-starlink-8x8-48-traffic.csv",
+    "metadata": "E:\\INT-Temerity\\examples\\datasets\\radar-calibrated-starlink-8x8-48-traffic.metadata.json",
+    "slices": 48,
+    "rows": 755,
+    "routed_tasks": 683,
+    "local_tasks": 72,
+    "total_traffic_mbps": 112655.77,
+    "total_compute_units": 9815.98,
+    "min_time_weight": 0.5,
+    "max_time_weight": 1.48,
+    "anomaly_count": 3
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "dataset_id": "stage1-empty",
+  "schema_version": "stage1-task-dataset-file-v1",
+  "profile": "empty",
+  "tasks": []
+}

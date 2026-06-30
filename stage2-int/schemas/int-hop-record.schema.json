@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stage2-int/schemas/int-hop-record.schema.json",
+  "title": "INT hop record",
+  "type": "object",
+  "required": [
+    "packet_id",
+    "task_id",
+    "slice_index",
+    "hop_index",
+    "node_id",
+    "role"
+  ],
+  "properties": {
+    "packet_id": { "type": "string" },
+    "task_id": { "type": "string" },
+    "slice_index": { "type": "integer", "minimum": 0 },
+    "time": { "type": "string" },
+    "hop_index": { "type": "integer", "minimum": 0 },
+    "node_id": { "type": "string" },
+    "role": { "enum": ["source", "transit", "sink", "local"] },
+    "previous_hop": { "type": "string" },
+    "next_hop": { "type": "string" },
+    "ingress_link_id": { "type": "string" },
+    "egress_link_id": { "type": "string" },
+    "observation_scope": { "enum": ["forwarding-hop", "local-adjacent-link"] },
+    "local_port_peer": { "type": "string" },
+    "observed_cpu_percent": { "type": "number" },
+    "observed_queue_depth": { "type": "number" },
+    "observed_queued_traffic_mb": { "type": "number" },
+    "observed_cache_used_mb": { "type": "number" },
+    "observed_energy_percent": { "type": "number" },
+    "observed_node_mode": { "type": "string" },
+    "observed_link_status": { "type": "string" },
+    "observed_link_utilization_percent": { "type": "number" },
+    "observed_link_latency_ms": { "type": "number" },
+    "observed_link_capacity_mbps": { "type": "number" }
+  },
+  "additionalProperties": true
+}

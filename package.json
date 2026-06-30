@@ -1,0 +1,48 @@
+{
+  "name": "int-temerity-walker-network",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc -p tsconfig.json && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "audit:simulation": "node scripts/auditSimulation.mjs",
+    "audit:stage1": "node scripts/auditStageOne.mjs",
+    "audit:exports": "node scripts/auditExports.mjs",
+    "audit:dashboard": "node scripts/auditDashboard.mjs",
+    "assess:stage1": "node scripts/assessStageOneModel.mjs",
+    "verify:stage1": "node scripts/verifyStageOne.mjs",
+    "baseline:stage1": "node scripts/exportStageOneBaseline.mjs",
+    "matrix:stage1": "node scripts/exportStageOneScenarioMatrix.mjs",
+    "trace:stage1": "node scripts/exportStageOneBusinessTrace.mjs",
+    "freeze:stage1": "node scripts/exportStageOneFreezeManifest.mjs",
+    "export:scenario": "node scripts/exportScenario.mjs",
+    "export:templates": "node scripts/exportDatasetTemplates.mjs",
+    "tle:fetch": "node scripts/fetchRealTleSnapshot.mjs",
+    "tle:verify": "node scripts/verifyRealTleSnapshot.mjs",
+    "int:experiment": "node stage2-int/tools/run-int-experiment.mjs",
+    "int:verify": "node stage2-int/tools/verify-int-experiment.mjs",
+    "verify:goal": "node scripts/verifyEndToEndGoal.mjs",
+    "validate:dataset": "node scripts/validateDataset.mjs",
+    "generate:real-traffic": "node scripts/generateRealSnapshotTraffic.mjs",
+    "generate:radar-traffic": "node scripts/generateRadarCalibratedTraffic.mjs",
+    "report:stage1": "node scripts/auditStageOne.mjs --report-dir reports/stage1"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "satellite.js": "^7.0.1",
+    "three": "^0.184.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@types/three": "^0.184.1",
+    "@vitejs/plugin-react": "^5.0.0",
+    "playwright": "^1.60.0",
+    "typescript": "^5.8.0",
+    "vite": "^8.0.16"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "traffic-int-basic",
+  "mode": "traffic-int",
+  "sample_rate": 1,
+  "telemetry_fields": [
+    "node_id",
+    "cpu_percent",
+    "queue_depth",
+    "queued_traffic_mb",
+    "egress_link_id",
+    "link_status",
+    "link_utilization_percent",
+    "link_latency_ms"
+  ]
+}
+

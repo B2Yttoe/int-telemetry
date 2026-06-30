@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stage2-int/schemas/int-report.schema.json",
+  "title": "INT telemetry report",
+  "type": "object",
+  "required": [
+    "report_id",
+    "packet_id",
+    "task_id",
+    "slice_index",
+    "sink_node",
+    "record_count",
+    "report_size_bytes",
+    "status"
+  ],
+  "properties": {
+    "report_id": { "type": "string" },
+    "packet_id": { "type": "string" },
+    "task_id": { "type": "string" },
+    "slice_index": { "type": "integer", "minimum": 0 },
+    "sink_node": { "type": "string" },
+    "ground_station": { "type": "string" },
+    "record_count": { "type": "integer", "minimum": 0 },
+    "report_size_bytes": { "type": "number", "minimum": 0 },
+    "status": { "enum": ["generated", "queued", "downlinked", "dropped"] },
+    "drop_reason": { "type": "string" }
+  },
+  "additionalProperties": true
+}
+

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://int-temerity.local/schemas/task-dataset-file.schema.json",
+  "title": "INT-Temerity Stage-1 Task Dataset File",
+  "description": "JSON upload contract for deterministic stage-one workload injection. CSV uploads use the same task fields as the task item schema.",
+  "oneOf": [
+    {
+      "type": "array",
+      "items": {
+        "$ref": "task-dataset.schema.json"
+      },
+      "description": "A JSON array of task records."
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tasks"],
+      "properties": {
+        "dataset_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional stable dataset identifier for experiment tracking."
+        },
+        "description": {
+          "type": "string",
+          "description": "Optional human-readable dataset description."
+        },
+        "schema_version": {
+          "type": "string",
+          "description": "Optional producer-side schema or dataset version."
+        },
+        "tasks": {
+          "type": "array",
+          "items": {
+            "$ref": "task-dataset.schema.json"
+          },
+          "description": "Task records injected into the stage-one operational simulation."
+        }
+      }
+    }
+  ],
+  "examples": [
+    [
+      {
+        "task_id": "json-flow-01",
+        "start_slice": 1,
+        "duration_slices": 4,
+        "source": "P01-S01",
+        "target": "P04-S05",
+        "compute_units": 24,
+        "memory_gb": 0.5,
+        "storage_gb": 1,
+        "traffic_mbps": 200,
+        "priority": 1,
+        "task_type": "mixed"
+      }
+    ],
+    {
+      "dataset_id": "stage1-json-example",
+      "schema_version": "stage1-task-dataset-file-v1",
+      "tasks": [
+        {
+          "task_id": "local-json-01",
+          "start_slice": 3,
+          "duration_slices": 2,
+          "node_id": "P03-S02",
+          "compute_units": 120,
+          "gpu_units": 4,
+          "memory_gb": 2,
+          "storage_gb": 8,
+          "traffic_mbps": 0,
+          "priority": 1,
+          "task_type": "compute"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "schema_version": "stage2-sampling-policy-v1",
+  "active_policy": "traffic-all",
+  "policies": {
+    "traffic-all": {
+      "mode": "traffic-int",
+      "sample_rate": 1,
+      "priority_bias": false,
+      "congestion_feedback": false
+    },
+    "traffic-probabilistic": {
+      "mode": "traffic-int",
+      "sample_rate": 0.25,
+      "priority_bias": false,
+      "congestion_feedback": false
+    },
+    "priority-aware": {
+      "mode": "traffic-int",
+      "sample_rate": 0.2,
+      "priority_bias": true,
+      "high_priority_multiplier": 3,
+      "congestion_feedback": false
+    },
+    "congestion-aware": {
+      "mode": "traffic-int",
+      "sample_rate": 0.2,
+      "priority_bias": true,
+      "congestion_feedback": true,
+      "feedback_source": "previous_int_observations_only"
+    }
+  }
+}
+

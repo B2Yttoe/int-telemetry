@@ -1,0 +1,36 @@
+{
+  "schema_version": "stage2-telemetry-fields-v1",
+  "node_fields": [
+    "node_id",
+    "mode",
+    "cpu_percent",
+    "queue_depth",
+    "queued_traffic_mb",
+    "cache_used_mb",
+    "energy_percent",
+    "can_accept_tasks"
+  ],
+  "link_fields": [
+    "link_id",
+    "status",
+    "is_active",
+    "utilization_percent",
+    "latency_ms",
+    "effective_capacity_mbps",
+    "queued_traffic_mb",
+    "dropped_traffic_mb",
+    "congestion_percent"
+  ],
+  "path_fields": [
+    "packet_id",
+    "task_id",
+    "slice_index",
+    "hop_index",
+    "role",
+    "ingress_link_id",
+    "egress_link_id",
+    "previous_hop",
+    "next_hop"
+  ]
+}
+

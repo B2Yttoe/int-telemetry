@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stage2-int/schemas/reconstructed-link.schema.json",
+  "title": "Reconstructed link state",
+  "type": "object",
+  "required": [
+    "slice_index",
+    "link_id",
+    "observed",
+    "confidence"
+  ],
+  "properties": {
+    "slice_index": { "type": "integer", "minimum": 0 },
+    "link_id": { "type": "string" },
+    "observed": { "type": "boolean" },
+    "last_observed_slice": { "type": "integer", "minimum": 0 },
+    "status_estimate": { "type": ["string", "null"] },
+    "utilization_percent_estimate": { "type": ["number", "null"] },
+    "latency_ms_estimate": { "type": ["number", "null"] },
+    "capacity_mbps_estimate": { "type": ["number", "null"] },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+  },
+  "additionalProperties": true
+}
+

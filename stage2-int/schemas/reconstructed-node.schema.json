@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stage2-int/schemas/reconstructed-node.schema.json",
+  "title": "Reconstructed node state",
+  "type": "object",
+  "required": [
+    "slice_index",
+    "node_id",
+    "observed",
+    "confidence"
+  ],
+  "properties": {
+    "slice_index": { "type": "integer", "minimum": 0 },
+    "node_id": { "type": "string" },
+    "observed": { "type": "boolean" },
+    "last_observed_slice": { "type": "integer", "minimum": 0 },
+    "cpu_percent_estimate": { "type": ["number", "null"] },
+    "queue_depth_estimate": { "type": ["number", "null"] },
+    "energy_percent_estimate": { "type": ["number", "null"] },
+    "mode_estimate": { "type": ["string", "null"] },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+  },
+  "additionalProperties": true
+}
+

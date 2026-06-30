@@ -1,0 +1,9 @@
+{
+  "name": "probe-int-path-balance",
+  "mode": "probe-int",
+  "algorithm": "path-balance",
+  "target": "cover-all-active-isl",
+  "segment_sorting": "ascending-length",
+  "reporting_policy": "single-ground-oam"
+}
+
