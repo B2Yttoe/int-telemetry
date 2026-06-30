@@ -273,9 +273,72 @@ http://localhost:5173/
 npm run build
 ```
 
-## 6. 常用命令
+## 6. Git 版本回滚
 
-### 6.1 第一阶段验收
+当前目录已经初始化为本地 Git 仓库，并创建了项目基线提交。后续修改代码或文档前，可以先查看状态：
+
+```bash
+git status
+```
+
+保存新的检查点：
+
+```bash
+git add .
+git commit -m "说明本次修改内容"
+```
+
+查看提交历史：
+
+```bash
+git log --oneline
+```
+
+撤销某个未提交文件的修改：
+
+```bash
+git restore path/to/file
+```
+
+撤销所有未提交修改：
+
+```bash
+git restore .
+```
+
+如果需要回到某个历史提交，先查看提交号：
+
+```bash
+git log --oneline
+```
+
+然后谨慎执行：
+
+```bash
+git reset --hard <commit_id>
+```
+
+`git reset --hard` 会丢弃当前未提交修改，执行前建议先用 `git status` 确认状态，必要时使用：
+
+```bash
+git stash
+```
+
+当前 `.gitignore` 已排除依赖、构建产物、临时日志和实验输出目录，包括：
+
+```text
+node_modules/
+dist/
+exports/
+reports/
+stage2-int/runs/
+stage2-int/outputs/
+project-docs/archived-runtime-artifacts/
+```
+
+## 7. 常用命令
+
+### 7.1 第一阶段验收
 
 ```bash
 npm run verify:stage1
@@ -286,7 +349,7 @@ npm run verify:stage1
 - 检查卫星网络真值模型是否可以正常生成；
 - 检查节点、链路、业务、导出字段是否满足当前阶段要求。
 
-### 6.2 总体验收
+### 7.2 总体验收
 
 ```bash
 npm run verify:goal
@@ -299,7 +362,7 @@ npm run verify:goal
 - 检查 Ground OAM 重构；
 - 检查关键产物是否存在。
 
-### 6.3 校验业务数据集
+### 7.3 校验业务数据集
 
 ```bash
 npm run validate:dataset -- --tasks examples/datasets/radar-calibrated-starlink-8x8-48-traffic.csv --tle-snapshot data/tle-snapshots/celestrak-starlink-real-walker-8x8.json
@@ -312,7 +375,7 @@ npm run validate:dataset -- --tasks examples/datasets/radar-calibrated-starlink-
 - 检查时间片范围；
 - 检查业务是否能被当前星座配置解释。
 
-### 6.4 导出第一阶段真值场景
+### 7.4 导出第一阶段真值场景
 
 ```bash
 npm run export:scenario -- --tasks examples/datasets/radar-calibrated-starlink-8x8-48-traffic.csv --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-real-walker-8x8.json --mode operational --out exports/radar-calibrated-starlink-8x8-48
@@ -329,7 +392,7 @@ metrics.csv
 manifest.json
 ```
 
-### 6.5 运行 INT 实验
+### 7.5 运行 INT 实验
 
 ```bash
 npm run int:experiment -- --tasks examples/datasets/radar-calibrated-starlink-8x8-48-traffic.csv --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-real-walker-8x8.json --mode operational --algorithm path-balance --out stage2-int/runs/radar-calibrated-8x8
@@ -348,7 +411,7 @@ ground-oam-evaluation.json
 int-process-visualization.json
 ```
 
-### 6.6 获取真实 TLE 快照
+### 7.6 获取真实 TLE 快照
 
 ```bash
 npm run tle:fetch
@@ -360,7 +423,7 @@ npm run tle:fetch
 npm run tle:verify -- --snapshot data/tle-snapshots/celestrak-starlink-real-walker-8x8.json
 ```
 
-### 6.7 生成业务数据集
+### 7.7 生成业务数据集
 
 生成真实星座快照风格业务：
 
@@ -374,7 +437,7 @@ npm run generate:real-traffic
 npm run generate:radar-traffic
 ```
 
-## 7. 仪表盘功能
+## 8. 仪表盘功能
 
 仪表盘主要用于观察和下载实验结果。
 
@@ -398,9 +461,9 @@ npm run generate:radar-traffic
 - 未观测节点和链路必须保留 unknown 状态；
 - 补全或推断结果不能被当成真实采样结果。
 
-## 8. 输入与输出
+## 9. 输入与输出
 
-### 8.1 主要输入
+### 9.1 主要输入
 
 | 输入 | 位置 | 说明 |
 |---|---|---|
@@ -409,7 +472,7 @@ npm run generate:radar-traffic
 | 业务数据集 | `examples/datasets/` | 外部任务流量输入。 |
 | 遥测配置 | `stage2-int/config/` | INT 实验参数。 |
 
-### 8.2 主要输出
+### 9.2 主要输出
 
 | 输出 | 位置 | 说明 |
 |---|---|---|
@@ -418,7 +481,7 @@ npm run generate:radar-traffic
 | 验收报告 | `reports/` | 阶段验收和总体目标验收。 |
 | 前端构建 | `dist/` | 构建后的网页产物。 |
 
-## 9. 数据真实性边界
+## 10. 数据真实性边界
 
 当前项目可以接入真实公开 TLE 快照，并使用 SGP4 传播轨道位置。这增强了轨道层真实性。
 
@@ -441,7 +504,7 @@ npm run generate:radar-traffic
 完全真实运营级卫星互联网数字孪生
 ```
 
-## 10. 后续研究方向
+## 11. 后续研究方向
 
 当前项目已经具备继续扩展的基础。后续优先方向包括：
 
@@ -457,7 +520,7 @@ npm run generate:radar-traffic
 4. **更严格协议级实现**  
    如果需要与真实网络协议栈对齐，可进一步引入 ns-3、P4 或容器网络仿真。
 
-## 11. 文档归档
+## 12. 文档归档
 
 为保持根目录简洁，旧版说明文件和截图已经归档到：
 
