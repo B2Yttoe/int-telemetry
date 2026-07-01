@@ -523,6 +523,7 @@ function buildDeliverables(manifest, verification = null) {
   const stage2Dir = manifest.outputs.stage2_int_dir;
   const trafficGroundDir = manifest.outputs.traffic_ground_oam_dir;
   const probeGroundDir = manifest.outputs.probe_ground_oam_dir;
+  const isIntMcRun = algorithm === "int-mc";
 
   return {
     schema_version: "stage2-int-telemetry-deliverables-v1",
@@ -544,14 +545,20 @@ function buildDeliverables(manifest, verification = null) {
       input_validation_md: manifest.outputs.input_validation_md,
     },
     primary_int_state_dataset: {
-      scope: "probe-int full-network per-time-step reconstruction",
+      scope: isIntMcRun
+        ? "LEO-INT-MC per-time-step link reconstruction from partial INT observations"
+        : "probe-int full-network per-time-step reconstruction",
       node_state_csv: join(probeGroundDir, "ground-reconstructed-nodes.csv"),
-      link_state_csv: join(probeGroundDir, "ground-reconstructed-links.csv"),
+      link_state_csv: isIntMcRun
+        ? manifest.outputs.int_mc_reconstructed_links_csv
+        : join(probeGroundDir, "ground-reconstructed-links.csv"),
       delivered_reports_csv: join(probeGroundDir, "ground-delivered-reports.csv"),
       coverage: {
         node_sample_coverage: manifest.accuracy.probe_int.node_sample_coverage,
         link_sample_coverage: manifest.accuracy.probe_int.link_sample_coverage,
         active_link_sample_coverage: manifest.accuracy.probe_int.active_link_sample_coverage,
+        int_mc_active_link_completion_coverage: manifest.accuracy.int_mc?.active_link_completion_coverage ?? null,
+        int_mc_inferred_rate_on_active: manifest.accuracy.int_mc?.inferred_rate_on_active ?? null,
         full_time_step_pass: manifest.accuracy.probe_int.full_time_step_pass,
         passed_slices: manifest.accuracy.probe_int.passed_slices,
         failed_slices: manifest.accuracy.probe_int.failed_slices,
@@ -574,6 +581,21 @@ function buildDeliverables(manifest, verification = null) {
       reports_csv: join(stage2Dir, `probe-int-reports-${algorithm}.csv`),
       run_report_json: join(stage2Dir, `probe-int-run-report-${algorithm}.json`),
     },
+    int_mc_outputs: isIntMcRun
+      ? {
+          reconstructed_links_csv: manifest.outputs.int_mc_reconstructed_links_csv,
+          link_errors_csv: manifest.outputs.int_mc_link_errors_csv,
+          matrix_summary_csv: manifest.outputs.int_mc_matrix_summary_csv,
+          evaluation_json: manifest.outputs.int_mc_evaluation_json,
+          contact_plan_json: manifest.outputs.int_mc_contact_plan_json,
+          selection_report_json: join(stage2Dir, `probe-coverage-${algorithm}.json`),
+          boundary: {
+            active_mask_source: "LEO contact plan",
+            observed_mask_source: "delivered INT reports",
+            topology_down_not_completed: true,
+          },
+        }
+      : null,
     process_visualization: {
       scope: "probe-int process playback package for dashboard visualization",
       visualization_json: manifest.outputs.process_visualization_json,
@@ -639,6 +661,14 @@ function buildDeliverablesMarkdown(deliverables) {
     reportLine("活动链路覆盖率", formatPercent(primary.coverage.active_link_sample_coverage)),
     reportLine("逐时间片通过", `${primary.coverage.full_time_step_pass} (${primary.coverage.passed_slices}/${primary.coverage.passed_slices + primary.coverage.failed_slices})`),
     reportLine("unknown 节点 / 链路", `${primary.coverage.unknown_node_samples} / ${primary.coverage.unknown_link_samples}`),
+    ...(deliverables.int_mc_outputs
+      ? [
+          reportLine("INT-MC 补全链路 CSV", deliverables.int_mc_outputs.reconstructed_links_csv),
+          reportLine("INT-MC active link completion", formatPercent(primary.coverage.int_mc_active_link_completion_coverage)),
+          reportLine("INT-MC inferred active rate", formatPercent(primary.coverage.int_mc_inferred_rate_on_active)),
+          reportLine("INT-MC evaluation", deliverables.int_mc_outputs.evaluation_json),
+        ]
+      : []),
     "",
     "## 业务流随路遥测",
     "",
@@ -780,17 +810,23 @@ function coverageAuditSummaryFrom(audit) {
 function buildAccuracyReport(manifest, verification = null) {
   const probe = manifest.accuracy.probe_int;
   const traffic = manifest.accuracy.traffic_int;
+  const intMc = manifest.accuracy.int_mc;
+  const isIntMcRun = manifest.input.algorithm === "int-mc";
   const audit = manifest.int_pipeline.full_coverage_audit ?? {};
   const auditSummary = coverageAuditSummaryFrom(audit);
-  const pass =
-    probe.node_sample_coverage === 1 &&
-    probe.link_sample_coverage === 1 &&
-    probe.active_link_sample_coverage === 1 &&
-    probe.mode_accuracy === 1 &&
-    probe.link_status_accuracy === 1 &&
-    probe.unknown_node_samples === 0 &&
-    probe.unknown_link_samples === 0 &&
-    probe.full_time_step_pass === true;
+  const pass = isIntMcRun
+    ? intMc?.active_link_completion_coverage === 1 &&
+      intMc?.unknown_link_samples === 0 &&
+      manifest.int_pipeline.int_mc_selection?.ok === true &&
+      manifest.int_pipeline.int_mc_reconstruction?.ok === true
+    : probe.node_sample_coverage === 1 &&
+      probe.link_sample_coverage === 1 &&
+      probe.active_link_sample_coverage === 1 &&
+      probe.mode_accuracy === 1 &&
+      probe.link_status_accuracy === 1 &&
+      probe.unknown_node_samples === 0 &&
+      probe.unknown_link_samples === 0 &&
+      probe.full_time_step_pass === true;
 
   return {
     schema_version: "stage2-int-telemetry-accuracy-report-v1",
@@ -798,10 +834,14 @@ function buildAccuracyReport(manifest, verification = null) {
     run_dir: manifest.run_dir,
     conclusion: {
       pass,
-      primary_mode: "probe-int",
+      primary_mode: isIntMcRun ? "leo-int-mc" : "probe-int",
       statement: pass
-        ? "probe-int delivered a complete per-time-step network-wide reconstruction for this experiment."
-        : "probe-int did not satisfy all full-network reconstruction criteria for this experiment.",
+        ? isIntMcRun
+          ? "LEO-INT-MC completed active link-state reconstruction from partial INT observations."
+          : "probe-int delivered a complete per-time-step network-wide reconstruction for this experiment."
+        : isIntMcRun
+          ? "LEO-INT-MC did not satisfy active-link completion criteria for this experiment."
+          : "probe-int did not satisfy all full-network reconstruction criteria for this experiment.",
     },
     input: {
       task_dataset_snapshot: manifest.input.tasks_snapshot_path ?? manifest.input.tasks_path,
@@ -816,13 +856,19 @@ function buildAccuracyReport(manifest, verification = null) {
     },
     telemetry_boundary: manifest.boundary,
     primary_probe_int: {
-      scope: "network-wide per-time-step state reconstructed by ground OAM from delivered probe-int reports",
+      scope: isIntMcRun
+        ? "partial probe-int observations plus LEO-INT-MC ground-side matrix completion"
+        : "network-wide per-time-step state reconstructed by ground OAM from delivered probe-int reports",
       node_state_csv: join(manifest.outputs.probe_ground_oam_dir, "ground-reconstructed-nodes.csv"),
-      link_state_csv: join(manifest.outputs.probe_ground_oam_dir, "ground-reconstructed-links.csv"),
+      link_state_csv: isIntMcRun
+        ? manifest.outputs.int_mc_reconstructed_links_csv
+        : join(manifest.outputs.probe_ground_oam_dir, "ground-reconstructed-links.csv"),
       delivered_reports_csv: join(manifest.outputs.probe_ground_oam_dir, "ground-delivered-reports.csv"),
       evaluation_json: join(manifest.outputs.probe_ground_oam_dir, "ground-oam-evaluation.json"),
       full_coverage_audit_json: join(manifest.outputs.probe_ground_oam_dir, "full-telemetry-coverage-audit.json"),
       metrics: probe,
+      int_mc_metrics: intMc,
+      int_mc_evaluation_json: manifest.outputs.int_mc_evaluation_json,
       coverage_audit_summary: auditSummary,
       per_slice_coverage: Array.isArray(audit.slices) ? audit.slices : [],
     },
@@ -837,6 +883,7 @@ function buildAccuracyReport(manifest, verification = null) {
 
 function buildAccuracyReportMarkdown(report) {
   const probe = report.primary_probe_int.metrics;
+  const intMc = report.primary_probe_int.int_mc_metrics;
   const traffic = report.traffic_int_reference.metrics;
   const audit = report.primary_probe_int.coverage_audit_summary ?? {};
   const verification = report.verification;
@@ -869,6 +916,24 @@ function buildAccuracyReportMarkdown(report) {
     reportLine("电量 MAE", formatValue(probe.energy_percent_mae)),
     reportLine("unknown 节点样本", formatValue(probe.unknown_node_samples)),
     reportLine("unknown 链路样本", formatValue(probe.unknown_link_samples)),
+    ...(intMc
+      ? [
+          "",
+          "## LEO-INT-MC 补全结果",
+          "",
+          "| 指标 | 值 |",
+          "|---|---:|",
+          reportLine("active link completion", formatPercent(intMc.active_link_completion_coverage)),
+          reportLine("direct observation rate", formatPercent(intMc.direct_observation_rate_on_active)),
+          reportLine("inferred active rate", formatPercent(intMc.inferred_rate_on_active)),
+          reportLine("observed link samples", formatValue(intMc.observed_link_samples)),
+          reportLine("inferred link samples", formatValue(intMc.inferred_link_samples)),
+          reportLine("topology-down link samples", formatValue(intMc.topology_down_link_samples)),
+          reportLine("unknown link samples", formatValue(intMc.unknown_link_samples)),
+          reportLine("status accuracy all links", formatPercent(intMc.status_accuracy_all_links)),
+          reportLine("evaluation JSON", report.primary_probe_int.int_mc_evaluation_json),
+        ]
+      : []),
     "",
     "## 逐时间片覆盖审计",
     "",
@@ -921,8 +986,16 @@ const algorithm = argValue(args, "--algorithm", "path-balance");
 const sampleRate = argValue(args, "--sample-rate", "1");
 const downlinkBudgetBytes = argValue(args, "--downlink-budget-bytes", "65536");
 const carryOver = argValue(args, "--carry-over", "true");
+const intMcCandidateAlgorithm = argValue(args, "--int-mc-candidate-algorithm", "path-balance");
+const intMcSamplingRate = argValue(args, "--int-mc-sampling-rate", "0.25");
+const intMcTargetActiveLinkSamplingRate = argValue(args, "--int-mc-target-active-link-sampling-rate", intMcSamplingRate);
+const intMcRank = argValue(args, "--int-mc-rank", "5");
+const intMcWindowSize = argValue(args, "--int-mc-window", "12");
+const intMcWarmupSlices = argValue(args, "--int-mc-warmup-slices", "3");
+const intMcIterations = argValue(args, "--int-mc-iterations", "12");
 const includeFullJson = hasArg(args, "--full-json");
 const skipVerify = hasArg(args, "--skip-verify");
+const isIntMc = algorithm === "int-mc";
 
 const originalTasksPath = tasksPath ? resolve(tasksPath) : "";
 if (originalTasksPath && !existsSync(originalTasksPath)) {
@@ -1016,6 +1089,34 @@ const probePlanning = parseLastJson(
   "probe path planner",
 );
 
+const intMcSelection = isIntMc
+  ? parseLastJson(
+      (
+        await runNode("stage2-int/tools/int-mc-path-selector.mjs", [
+          "--input",
+          stage1Dir,
+          "--stage2",
+          stage2Dir,
+          "--algorithm",
+          algorithm,
+          "--candidate-algorithm",
+          intMcCandidateAlgorithm,
+          "--sampling-rate",
+          intMcSamplingRate,
+          "--target-active-link-sampling-rate",
+          intMcTargetActiveLinkSamplingRate,
+          "--rank",
+          intMcRank,
+          "--window-size",
+          intMcWindowSize,
+          "--warmup-slices",
+          intMcWarmupSlices,
+        ])
+      ).stdout,
+      "leo int-mc path selector",
+    )
+  : null;
+
 const reporting = parseLastJson(
   (
     await runNode("stage2-int/tools/reporting-path-planner.mjs", [
@@ -1025,6 +1126,8 @@ const reporting = parseLastJson(
       stage2Dir,
       "--algorithm",
       algorithm,
+      "--probes",
+      join(stage2Dir, `probe-paths-${algorithm}.csv`),
     ])
   ).stdout,
   "reporting path planner",
@@ -1084,6 +1187,30 @@ const probeGround = parseLastJson(
   "probe ground OAM",
 );
 
+const intMcReconstruction = isIntMc
+  ? parseLastJson(
+      (
+        await runNode("stage2-int/tools/int-mc-reconstructor.mjs", [
+          "--input",
+          stage1Dir,
+          "--stage2",
+          stage2Dir,
+          "--ground",
+          probeGroundDir,
+          "--algorithm",
+          algorithm,
+          "--rank",
+          intMcRank,
+          "--window-size",
+          intMcWindowSize,
+          "--iterations",
+          intMcIterations,
+        ])
+      ).stdout,
+      "leo int-mc reconstructor",
+    )
+  : null;
+
 const fullCoverageAudit = parseLastJson(
   (
     await runNode("stage2-int/tools/audit-full-telemetry-coverage.mjs", [
@@ -1099,6 +1226,7 @@ const fullCoverageAudit = parseLastJson(
 const trafficEvaluation = await readJson(join(trafficGroundDir, "ground-oam-evaluation.json"));
 const probeEvaluation = await readJson(join(probeGroundDir, "ground-oam-evaluation.json"));
 const coverageAudit = await readJson(join(probeGroundDir, "full-telemetry-coverage-audit.json"));
+const intMcEvaluation = isIntMc ? await readJson(join(probeGroundDir, "int-mc-evaluation.json")) : null;
 
 const manifest = {
   schema_version: "stage2-int-experiment-run-v1",
@@ -1120,6 +1248,17 @@ const manifest = {
     sample_rate: Number(sampleRate),
     downlink_budget_bytes: Number(downlinkBudgetBytes),
     carry_over: carryOver !== "false",
+    int_mc: isIntMc
+      ? {
+          candidate_algorithm: intMcCandidateAlgorithm,
+          sampling_rate: Number(intMcSamplingRate),
+          target_active_link_sampling_rate: Number(intMcTargetActiveLinkSamplingRate),
+          rank: Number(intMcRank),
+          window_size: Number(intMcWindowSize),
+          warmup_slices: Number(intMcWarmupSlices),
+          iterations: Number(intMcIterations),
+        }
+      : null,
     validation: {
       report_json: join(runDir, "input-dataset-validation.json"),
       report_md: join(runDir, "input-dataset-validation.md"),
@@ -1138,10 +1277,12 @@ const manifest = {
   int_pipeline: {
     traffic_int: trafficInt,
     probe_planning: probePlanning,
+    int_mc_selection: intMcSelection,
     reporting,
     probe_int: probeInt,
     traffic_ground_oam: trafficGround,
     probe_ground_oam: probeGround,
+    int_mc_reconstruction: intMcReconstruction,
     full_coverage_audit: fullCoverageAudit,
   },
   accuracy: {
@@ -1174,6 +1315,19 @@ const manifest = {
       passed_slices: coverageAudit.summary.passed_slices,
       failed_slices: coverageAudit.summary.failed_slices,
     },
+    int_mc: intMcEvaluation
+      ? {
+          active_link_completion_coverage: intMcEvaluation.reconstruction.active_link_completion_coverage,
+          direct_observation_rate_on_active: intMcEvaluation.reconstruction.direct_observation_rate_on_active,
+          inferred_rate_on_active: intMcEvaluation.reconstruction.inferred_rate_on_active,
+          observed_link_samples: intMcEvaluation.reconstruction.observed_link_samples,
+          inferred_link_samples: intMcEvaluation.reconstruction.inferred_link_samples,
+          topology_down_link_samples: intMcEvaluation.reconstruction.topology_down_link_samples,
+          unknown_link_samples: intMcEvaluation.reconstruction.unknown_link_samples,
+          status_accuracy_all_links: intMcEvaluation.reconstruction.status_accuracy_all_links,
+          metrics: intMcEvaluation.metrics,
+        }
+      : null,
   },
   boundary: {
     stage1_truth_used_for_runtime: false,
@@ -1201,6 +1355,11 @@ const manifest = {
     verification_md: join(runDir, "int-experiment-verification.md"),
     file_index_json: join(runDir, "int-experiment-file-index.json"),
     file_index_md: join(runDir, "int-experiment-file-index.md"),
+    int_mc_reconstructed_links_csv: isIntMc ? join(probeGroundDir, "ground-mc-reconstructed-links.csv") : "",
+    int_mc_link_errors_csv: isIntMc ? join(probeGroundDir, "int-mc-link-errors.csv") : "",
+    int_mc_matrix_summary_csv: isIntMc ? join(probeGroundDir, "int-mc-matrix-summary.csv") : "",
+    int_mc_evaluation_json: isIntMc ? join(probeGroundDir, "int-mc-evaluation.json") : "",
+    int_mc_contact_plan_json: isIntMc ? join(stage2Dir, `int-mc-contact-plan-${algorithm}.json`) : "",
   },
 };
 

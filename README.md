@@ -227,6 +227,27 @@ stage2-int/
 - `congestion-aware`
 - `energy-aware`
 
+当前已经落地的 `int-mc` 是卫星适配版 LEO-INT-MC。它不直接移植 Mininet/P4 原型，而是在现有第二阶段管线中新增两步：
+
+- 根据 TLE/SGP4 拓扑快照生成 contact plan，并从 `path-balance` 候选路径中选择少量高信息 probe path；
+- Ground OAM 收到部分 INT 报告后，对物理可用但未观测的链路做矩阵补全，物理断链保持 `topology-down`。
+
+运行示例：
+
+```bash
+npm run int:experiment -- --tasks examples/datasets/stage1-standard-traffic.csv --out stage2-int/runs/int-mc-smoke --orbit tle-sgp4 --mode operational --algorithm int-mc --int-mc-sampling-rate 0.25 --int-mc-rank 5 --int-mc-window 12
+```
+
+关键产物：
+
+```text
+stage2-int/probe-paths-int-mc.csv
+stage2-int/probe-coverage-int-mc.json
+stage2-int/int-mc-contact-plan-int-mc.json
+stage2-int/ground-probe-int-mc/ground-mc-reconstructed-links.csv
+stage2-int/ground-probe-int-mc/int-mc-evaluation.json
+```
+
 ### 4.3 Ground OAM
 
 Ground OAM 是地面运维与管理系统。它接收 INT sink 生成的遥测报告，并尝试重构当前网络状态。

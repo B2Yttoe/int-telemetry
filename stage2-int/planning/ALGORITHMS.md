@@ -168,6 +168,45 @@ node stage2-int/tools/reporting-path-planner.mjs --input exports/tmp-highload-ch
 - 在当前 active ISL 图上用 Dijkstra 计算 `INT sink -> direct-linked satellite` 最短路径。
 - 输出 `reporting-paths-path-balance.csv`、`reporting-summary-path-balance.csv`、`reporting-coverage-path-balance.json`。
 
+## 5. LEO-INT-MC
+
+`int-mc` 是从 `E:\INT-MC-main\INT-MC-main` 中迁移过来的 INT-MC 思想版，而不是直接搬运 Mininet/P4 原型。原型中的核心思想包括：
+
+- 按路径而不是按单个链路进行采样。
+- 用 leverage score 选择信息量更高的采样位置。
+- 用矩阵补全恢复未直接观测的网络状态。
+
+卫星网络适配后的实现位于：
+
+```text
+stage2-int/tools/int-mc-path-selector.mjs
+stage2-int/tools/int-mc-reconstructor.mjs
+```
+
+LEO 动态拓扑下的关键改动：
+
+- 使用 TLE/SGP4 拓扑快照形成 contact plan。
+- 将相似时间片归入 topology class，避免每个时间片从零重算。
+- 区分 `active_mask` 与 `observed_mask`：物理断链不参与补全，只有物理可用但未观测的链路才补全。
+- 使用确定性 warmup 和滑动窗口 stale-link 优先级，替代 Mininet 原型中的随机初始采样。
+- 矩阵补全运行在 Ground OAM 侧，卫星端不承担矩阵分解计算。
+
+运行方式：
+
+```powershell
+npm run int:experiment -- --tasks examples/datasets/stage1-standard-traffic.csv --out stage2-int/runs/int-mc-smoke --orbit tle-sgp4 --mode operational --algorithm int-mc --int-mc-sampling-rate 0.25 --int-mc-rank 5 --int-mc-window 12
+```
+
+主要输出：
+
+- `stage2-int/probe-paths-int-mc.csv`：LEO-INT-MC 选择后的低开销 probe path。
+- `stage2-int/probe-coverage-int-mc.json`：路径采样、topology class 与 contact plan 摘要。
+- `stage2-int/int-mc-contact-plan-int-mc.json`：按时间片组织的 contact plan。
+- `stage2-int/ground-probe-int-mc/ground-mc-reconstructed-links.csv`：Ground OAM 侧矩阵补全后的链路状态。
+- `stage2-int/ground-probe-int-mc/int-mc-evaluation.json`：补全覆盖率、误差和边界说明。
+
+注意：`int-mc` 的直接 probe 覆盖率不会等于 100%，这是设计目标。它的有效性应看 active link completion、推断误差、遥测开销和 topology-down 边界，而不是看直接观测覆盖率。
+
 ## 6. Ground OAM Reconstruction
 
 输入：

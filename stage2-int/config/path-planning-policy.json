@@ -19,7 +19,19 @@
       "balance": true,
       "segment_sorting": "ascending-length",
       "target": "cover-all-active-isl-with-balanced-paths"
+    },
+    "int-mc": {
+      "mode": "probe-int",
+      "algorithm": "leo-contact-plan-leverage-sampling",
+      "candidate_algorithm": "path-balance",
+      "target": "sample-high-information-paths-and-complete-unobserved-active-links",
+      "ground_reconstruction": "matrix-completion",
+      "satellite_adaptations": [
+        "contact-plan topology classes",
+        "active mask separated from observed mask",
+        "sliding-window stale-link priority",
+        "topology-down links excluded from completion"
+      ]
     }
   }
 }
-

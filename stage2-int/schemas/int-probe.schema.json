@@ -28,9 +28,8 @@
     "path_length": { "type": "integer", "minimum": 0 },
     "covered_link_count": { "type": "integer", "minimum": 0 },
     "planning_algorithm": {
-      "enum": ["traffic-int", "path-original", "path-balance"]
+      "enum": ["traffic-int", "path-original", "path-balance", "int-mc"]
     }
   },
   "additionalProperties": true
 }
-

@@ -1,0 +1,30 @@
+{
+  "schema_version": "stage2-leo-int-mc-policy-v1",
+  "name": "leo-int-mc",
+  "purpose": "Adapt INT-MC low-overhead telemetry recovery to predictable dynamic LEO satellite networks.",
+  "candidate_algorithm": "path-balance",
+  "sampling": {
+    "sampling_rate": 0.25,
+    "target_active_link_sampling_rate": 0.25,
+    "warmup_slices": 3,
+    "window_size": 12,
+    "rank": 5,
+    "iterations": 12,
+    "topology_class_threshold": 0.08,
+    "min_paths_per_slice": 1
+  },
+  "leo_adaptations": {
+    "contact_plan": "Use predicted active-link masks from TLE/SGP4-derived topology snapshots.",
+    "topology_classes": "Reuse path templates across similar topology snapshots instead of recomputing every slice from scratch.",
+    "active_observed_masks": "Separate physically unavailable links from available-but-unobserved links.",
+    "completion_scope": "Complete only active and unobserved links; topology-down links stay down.",
+    "execution_location": "Matrix completion runs at Ground OAM, not on satellites."
+  },
+  "outputs": {
+    "selected_probe_paths": "probe-paths-int-mc.csv",
+    "selection_report": "probe-coverage-int-mc.json",
+    "contact_plan": "int-mc-contact-plan-int-mc.json",
+    "completed_links": "ground-probe-int-mc/ground-mc-reconstructed-links.csv",
+    "evaluation": "ground-probe-int-mc/int-mc-evaluation.json"
+  }
+}

@@ -126,6 +126,7 @@ const probeGroundDir = resolveFromRun(
   `stage2-int/ground-probe-${manifest.input?.algorithm ?? "path-balance"}`,
 );
 const algorithm = manifest.input?.algorithm ?? "path-balance";
+const isIntMcRun = algorithm === "int-mc";
 
 const checks = [];
 function check(label, passed, evidence, extra = {}) {
@@ -178,9 +179,17 @@ const requiredFiles = {
   coverageAudit: join(probeGroundDir, "full-telemetry-coverage-audit.json"),
   reconstructedNodes: join(probeGroundDir, "ground-reconstructed-nodes.csv"),
   reconstructedLinks: join(probeGroundDir, "ground-reconstructed-links.csv"),
+  intMcReconstructedLinks: resolveFromRun(runDir, manifest.outputs?.int_mc_reconstructed_links_csv, "stage2-int/ground-probe-int-mc/ground-mc-reconstructed-links.csv"),
+  intMcLinkErrors: resolveFromRun(runDir, manifest.outputs?.int_mc_link_errors_csv, "stage2-int/ground-probe-int-mc/int-mc-link-errors.csv"),
+  intMcMatrixSummary: resolveFromRun(runDir, manifest.outputs?.int_mc_matrix_summary_csv, "stage2-int/ground-probe-int-mc/int-mc-matrix-summary.csv"),
+  intMcEvaluation: resolveFromRun(runDir, manifest.outputs?.int_mc_evaluation_json, "stage2-int/ground-probe-int-mc/int-mc-evaluation.json"),
+  intMcContactPlan: resolveFromRun(runDir, manifest.outputs?.int_mc_contact_plan_json, "stage2-int/int-mc-contact-plan-int-mc.json"),
 };
 
-Object.entries(requiredFiles).forEach(([label, path]) => checkPath(`file exists: ${label}`, path));
+Object.entries(requiredFiles).forEach(([label, path]) => {
+  if (!isIntMcRun && label.startsWith("intMc")) return;
+  checkPath(`file exists: ${label}`, path);
+});
 if (manifest.input?.tasks_snapshot_path) {
   checkPath("file exists: taskDatasetSnapshot", resolve(String(manifest.input.tasks_snapshot_path)));
 }
@@ -198,6 +207,9 @@ const csvExpectations = [
   ["reporting path rows", requiredFiles.reportingPaths, manifest.int_pipeline?.reporting?.plannedReportingPaths],
   ["probe reconstructed node rows", requiredFiles.reconstructedNodes, manifest.stage1?.counts?.nodes],
   ["probe reconstructed link rows", requiredFiles.reconstructedLinks, manifest.stage1?.counts?.links],
+  ...(isIntMcRun
+    ? [["int-mc reconstructed link rows", requiredFiles.intMcReconstructedLinks, manifest.stage1?.counts?.links]]
+    : []),
 ];
 
 for (const [label, path, expected] of csvExpectations) {
@@ -216,6 +228,7 @@ const inputValidation = existsSync(requiredFiles.inputValidationJson) ? await re
 const deliverables = existsSync(requiredFiles.deliverablesJson) ? await readJson(requiredFiles.deliverablesJson) : {};
 const processVisualization = existsSync(requiredFiles.processVisualizationJson) ? await readJson(requiredFiles.processVisualizationJson) : {};
 const accuracyReport = existsSync(requiredFiles.accuracyReportJson) ? await readJson(requiredFiles.accuracyReportJson) : {};
+const intMcEvaluation = isIntMcRun && existsSync(requiredFiles.intMcEvaluation) ? await readJson(requiredFiles.intMcEvaluation) : {};
 
 check("traffic OAM boundary", trafficEvaluation.boundary?.runtime_uses_only_delivered_int_reports === true, formatValue(trafficEvaluation.boundary?.runtime_uses_only_delivered_int_reports));
 check("probe OAM boundary", probeEvaluation.boundary?.runtime_uses_only_delivered_int_reports === true, formatValue(probeEvaluation.boundary?.runtime_uses_only_delivered_int_reports));
@@ -226,7 +239,14 @@ check("input validation snapshot path", !manifest.input?.tasks_snapshot_path || 
 check("input validation stage1 fingerprint", inputValidation.fingerprints?.stage1_dataset === manifest.stage1?.fingerprints?.dataset, formatValue(inputValidation.fingerprints?.stage1_dataset));
 check("deliverables schema", deliverables.schema_version === "stage2-int-telemetry-deliverables-v1", formatValue(deliverables.schema_version));
 check("deliverables primary node dataset", samePath(deliverables.primary_int_state_dataset?.node_state_csv, requiredFiles.reconstructedNodes), formatValue(deliverables.primary_int_state_dataset?.node_state_csv));
-check("deliverables primary link dataset", samePath(deliverables.primary_int_state_dataset?.link_state_csv, requiredFiles.reconstructedLinks), formatValue(deliverables.primary_int_state_dataset?.link_state_csv));
+check(
+  "deliverables primary link dataset",
+  samePath(
+    deliverables.primary_int_state_dataset?.link_state_csv,
+    isIntMcRun ? requiredFiles.intMcReconstructedLinks : requiredFiles.reconstructedLinks,
+  ),
+  formatValue(deliverables.primary_int_state_dataset?.link_state_csv),
+);
 check("deliverables input validation", samePath(deliverables.input?.input_validation_json, requiredFiles.inputValidationJson), formatValue(deliverables.input?.input_validation_json));
 check("deliverables final accuracy report", samePath(deliverables.validation?.final_accuracy_report_json, requiredFiles.accuracyReportJson), formatValue(deliverables.validation?.final_accuracy_report_json));
 check("deliverables process visualization", samePath(deliverables.process_visualization?.visualization_json, requiredFiles.processVisualizationJson), formatValue(deliverables.process_visualization?.visualization_json));
@@ -244,22 +264,41 @@ check("process visualization non-truth state boundary", processVisualization.bou
 check("accuracy report schema", accuracyReport.schema_version === "stage2-int-telemetry-accuracy-report-v1", formatValue(accuracyReport.schema_version));
 check("accuracy report conclusion", accuracyReport.conclusion?.pass === true, formatValue(accuracyReport.conclusion?.pass));
 check("accuracy report primary node dataset", samePath(accuracyReport.primary_probe_int?.node_state_csv, requiredFiles.reconstructedNodes), formatValue(accuracyReport.primary_probe_int?.node_state_csv));
-check("accuracy report primary link dataset", samePath(accuracyReport.primary_probe_int?.link_state_csv, requiredFiles.reconstructedLinks), formatValue(accuracyReport.primary_probe_int?.link_state_csv));
+check(
+  "accuracy report primary link dataset",
+  samePath(
+    accuracyReport.primary_probe_int?.link_state_csv,
+    isIntMcRun ? requiredFiles.intMcReconstructedLinks : requiredFiles.reconstructedLinks,
+  ),
+  formatValue(accuracyReport.primary_probe_int?.link_state_csv),
+);
 check("accuracy report probe node coverage", accuracyReport.primary_probe_int?.metrics?.node_sample_coverage === manifest.accuracy?.probe_int?.node_sample_coverage, formatValue(accuracyReport.primary_probe_int?.metrics?.node_sample_coverage));
 check("accuracy report probe link coverage", accuracyReport.primary_probe_int?.metrics?.link_sample_coverage === manifest.accuracy?.probe_int?.link_sample_coverage, formatValue(accuracyReport.primary_probe_int?.metrics?.link_sample_coverage));
-check("accuracy report coverage audit pass", accuracyReport.primary_probe_int?.coverage_audit_summary?.pass === true, formatValue(accuracyReport.primary_probe_int?.coverage_audit_summary?.pass));
-check("probe node coverage threshold", nearlyAtLeast(manifest.accuracy?.probe_int?.node_sample_coverage, minProbeNodeCoverage), formatValue(manifest.accuracy?.probe_int?.node_sample_coverage));
-check("probe link coverage threshold", nearlyAtLeast(manifest.accuracy?.probe_int?.link_sample_coverage, minProbeLinkCoverage), formatValue(manifest.accuracy?.probe_int?.link_sample_coverage));
-check("probe active link coverage", nearlyAtLeast(manifest.accuracy?.probe_int?.active_link_sample_coverage, 1), formatValue(manifest.accuracy?.probe_int?.active_link_sample_coverage));
-check("probe mode accuracy", nearlyAtLeast(manifest.accuracy?.probe_int?.mode_accuracy, 1), formatValue(manifest.accuracy?.probe_int?.mode_accuracy));
-check("probe link status accuracy", nearlyAtLeast(manifest.accuracy?.probe_int?.link_status_accuracy, 1), formatValue(manifest.accuracy?.probe_int?.link_status_accuracy));
+if (isIntMcRun) {
+  check("int-mc selection completed", manifest.int_pipeline?.int_mc_selection?.ok === true, formatValue(manifest.int_pipeline?.int_mc_selection?.ok));
+  check("int-mc reconstruction completed", manifest.int_pipeline?.int_mc_reconstruction?.ok === true, formatValue(manifest.int_pipeline?.int_mc_reconstruction?.ok));
+  check("int-mc evaluation schema", intMcEvaluation.schema_version === "stage2-leo-int-mc-evaluation-v1", formatValue(intMcEvaluation.schema_version));
+  check("int-mc ground-side boundary", intMcEvaluation.boundary?.matrix_completion_runs_at_ground_oam === true, formatValue(intMcEvaluation.boundary?.matrix_completion_runs_at_ground_oam));
+  check("int-mc topology down not completed", intMcEvaluation.boundary?.topology_down_not_completed === true, formatValue(intMcEvaluation.boundary?.topology_down_not_completed));
+  check("int-mc active completion coverage", nearlyAtLeast(manifest.accuracy?.int_mc?.active_link_completion_coverage, 1), formatValue(manifest.accuracy?.int_mc?.active_link_completion_coverage));
+  check("int-mc unknown link samples", manifest.accuracy?.int_mc?.unknown_link_samples === 0, formatValue(manifest.accuracy?.int_mc?.unknown_link_samples));
+  check("int-mc has inferred links", (manifest.accuracy?.int_mc?.inferred_link_samples ?? 0) > 0, formatValue(manifest.accuracy?.int_mc?.inferred_link_samples));
+  check("int-mc accuracy report mode", accuracyReport.conclusion?.primary_mode === "leo-int-mc", formatValue(accuracyReport.conclusion?.primary_mode));
+} else {
+  check("accuracy report coverage audit pass", accuracyReport.primary_probe_int?.coverage_audit_summary?.pass === true, formatValue(accuracyReport.primary_probe_int?.coverage_audit_summary?.pass));
+  check("probe node coverage threshold", nearlyAtLeast(manifest.accuracy?.probe_int?.node_sample_coverage, minProbeNodeCoverage), formatValue(manifest.accuracy?.probe_int?.node_sample_coverage));
+  check("probe link coverage threshold", nearlyAtLeast(manifest.accuracy?.probe_int?.link_sample_coverage, minProbeLinkCoverage), formatValue(manifest.accuracy?.probe_int?.link_sample_coverage));
+  check("probe active link coverage", nearlyAtLeast(manifest.accuracy?.probe_int?.active_link_sample_coverage, 1), formatValue(manifest.accuracy?.probe_int?.active_link_sample_coverage));
+  check("probe mode accuracy", nearlyAtLeast(manifest.accuracy?.probe_int?.mode_accuracy, 1), formatValue(manifest.accuracy?.probe_int?.mode_accuracy));
+  check("probe link status accuracy", nearlyAtLeast(manifest.accuracy?.probe_int?.link_status_accuracy, 1), formatValue(manifest.accuracy?.probe_int?.link_status_accuracy));
+}
 
-if (requireNoUnknownProbe) {
+if (requireNoUnknownProbe && !isIntMcRun) {
   check("probe unknown node samples", manifest.accuracy?.probe_int?.unknown_node_samples === 0, formatValue(manifest.accuracy?.probe_int?.unknown_node_samples));
   check("probe unknown link samples", manifest.accuracy?.probe_int?.unknown_link_samples === 0, formatValue(manifest.accuracy?.probe_int?.unknown_link_samples));
 }
 
-if (requireProbeFull) {
+if (requireProbeFull && !isIntMcRun) {
   check("probe full time-step pass", manifest.accuracy?.probe_int?.full_time_step_pass === true, formatValue(manifest.accuracy?.probe_int?.full_time_step_pass));
   check("coverage audit pass", coverageAudit.summary?.pass === true, formatValue(coverageAudit.summary?.pass));
   check("coverage audit passed slices", coverageAudit.summary?.passed_slices === manifest.stage1?.counts?.metrics, `passed=${formatValue(coverageAudit.summary?.passed_slices)}, slices=${formatValue(manifest.stage1?.counts?.metrics)}`);
@@ -296,6 +335,8 @@ const report = {
     probe_node_coverage: manifest.accuracy?.probe_int?.node_sample_coverage ?? null,
     probe_link_coverage: manifest.accuracy?.probe_int?.link_sample_coverage ?? null,
     probe_full_time_step_pass: manifest.accuracy?.probe_int?.full_time_step_pass ?? null,
+    int_mc_active_link_completion_coverage: manifest.accuracy?.int_mc?.active_link_completion_coverage ?? null,
+    int_mc_inferred_rate_on_active: manifest.accuracy?.int_mc?.inferred_rate_on_active ?? null,
   },
   checks,
 };
