@@ -121,6 +121,10 @@ async function readCsv(path) {
   return parseCsv(await readFile(path, "utf8"));
 }
 
+async function readJson(path) {
+  return JSON.parse(await readFile(path, "utf8"));
+}
+
 function hashText(value) {
   return createHash("sha256").update(value).digest("hex").slice(0, 12);
 }
@@ -191,13 +195,24 @@ function topEigenvectorsSymmetric(matrix, rank) {
   return vectors;
 }
 
+function planningActive(link) {
+  if (link.predicted_active !== undefined) return boolValue(link.predicted_active);
+  return boolValue(link.is_active);
+}
+
+function linkAvailability(link) {
+  const value = numberValue(link.p_available, NaN);
+  if (Number.isFinite(value)) return Math.max(0.01, Math.min(0.99, value));
+  return planningActive(link) ? 0.95 : 0.05;
+}
+
 function buildContactPlan({ linksBySlice, sliceIndexes, classThreshold }) {
   const classes = [];
   const perSlice = [];
 
   sliceIndexes.forEach((sliceIndex) => {
     const links = linksBySlice.get(sliceIndex) ?? [];
-    const activeLinks = links.filter((link) => boolValue(link.is_active));
+    const activeLinks = links.filter((link) => planningActive(link));
     const activeSet = new Set(activeLinks.map((link) => link.link_id));
     const signature = hashText([...activeSet].sort().join("|"));
     let contactClass = classes.find((item) => 1 - jaccard(item.prototypeActiveSet, activeSet) <= classThreshold);
@@ -218,6 +233,7 @@ function buildContactPlan({ linksBySlice, sliceIndexes, classThreshold }) {
       active_link_count: activeSet.size,
       active_intra_links: activeLinks.filter((link) => link.kind === "intra-plane").length,
       active_inter_links: activeLinks.filter((link) => link.kind === "inter-plane").length,
+      mean_predicted_availability: round(mean(activeLinks.map((link) => linkAvailability(link)))),
       signature,
       activeSet,
     });
@@ -245,7 +261,7 @@ function buildLeverageScores({ linksById, sliceIndexes, rank }) {
     const bySlice = linksById.get(linkId);
     sliceIndexes.forEach((sliceIndex) => {
       const link = bySlice.get(sliceIndex);
-      if (!link || !boolValue(link.is_active)) return;
+      if (!link || !planningActive(link)) return;
       latencyValues.push(numberValue(link.latency_ms));
       distanceValues.push(numberValue(link.distance_km));
       capacityValues.push(numberValue(link.effective_capacity_mbps || link.capacity_mbps));
@@ -266,7 +282,7 @@ function buildLeverageScores({ linksById, sliceIndexes, rank }) {
     let transitions = 0;
     sliceIndexes.forEach((sliceIndex) => {
       const link = bySlice.get(sliceIndex);
-      const active = link ? boolValue(link.is_active) : false;
+      const active = link ? planningActive(link) : false;
       if (previousActive !== null && previousActive !== active) transitions += 1;
       previousActive = active;
       if (!active) {
@@ -329,7 +345,145 @@ function buildLinksById(links) {
   return map;
 }
 
+function buildPlanningLinks({ truthLinks, predictedPlan }) {
+  if (!predictedPlan) return truthLinks;
+  const truthByKey = indexBy(truthLinks, (link) => `${link.slice_index}|${link.link_id}`);
+  return (predictedPlan.entries ?? []).map((entry) => {
+    const truth = truthByKey.get(`${entry.slice_index}|${entry.link_id}`) ?? {};
+    return {
+      ...truth,
+      ...entry,
+      is_active: entry.predicted_active,
+      status: entry.predicted_active ? truth.status || "up" : "down",
+      effective_capacity_mbps: entry.capacity_mbps || truth.effective_capacity_mbps || truth.capacity_mbps,
+      latency_ms: truth.latency_ms,
+      utilization_percent: truth.utilization_percent,
+      congestion_percent: truth.congestion_percent,
+    };
+  });
+}
+
+function buildGraphsBySlice(links) {
+  const graphs = new Map();
+  links.forEach((link) => {
+    if (!planningActive(link)) return;
+    const sliceIndex = String(link.slice_index);
+    if (!graphs.has(sliceIndex)) graphs.set(sliceIndex, new Map());
+    const graph = graphs.get(sliceIndex);
+    const addEdge = (from, to) => {
+      if (!from || !to) return;
+      if (!graph.has(from)) graph.set(from, []);
+      graph.get(from).push({
+        to,
+        link_id: link.link_id,
+        cost:
+          1 +
+          Math.max(0, numberValue(link.distance_km, 0)) / 6500 +
+          (1 - linkAvailability(link)) * 3 +
+          (link.kind === "inter-plane" ? 0.05 : 0),
+      });
+    };
+    addEdge(link.source, link.target);
+    addEdge(link.target, link.source);
+  });
+  return graphs;
+}
+
+function shortestPath(graph, source, sink) {
+  if (!graph || !source || !sink) return null;
+  if (source === sink) return { nodes: [source], linkIds: [], cost: 0 };
+  const distances = new Map([[source, 0]]);
+  const previous = new Map();
+  const pending = new Set(graph.keys());
+  pending.add(source);
+  pending.add(sink);
+
+  while (pending.size > 0) {
+    let current = null;
+    let best = Infinity;
+    for (const node of pending) {
+      const value = distances.get(node) ?? Infinity;
+      if (value < best) {
+        best = value;
+        current = node;
+      }
+    }
+    if (current === null || !Number.isFinite(best)) break;
+    pending.delete(current);
+    if (current === sink) break;
+    (graph.get(current) ?? []).forEach((edge) => {
+      const nextDistance = best + edge.cost;
+      if (nextDistance < (distances.get(edge.to) ?? Infinity)) {
+        distances.set(edge.to, nextDistance);
+        previous.set(edge.to, { node: current, linkId: edge.link_id });
+        pending.add(edge.to);
+      }
+    });
+  }
+
+  if (!previous.has(sink)) return null;
+  const nodes = [sink];
+  const linkIds = [];
+  let cursor = sink;
+  while (cursor !== source) {
+    const step = previous.get(cursor);
+    if (!step) return null;
+    linkIds.unshift(step.linkId);
+    nodes.unshift(step.node);
+    cursor = step.node;
+  }
+  return { nodes, linkIds, cost: distances.get(sink) ?? 0 };
+}
+
+function unique(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function pathRisk({ sliceIndex, linkIds, linksBySliceAndId }) {
+  if (linkIds.length === 0) return 1;
+  const risks = linkIds.map((linkId) => {
+    const row = linksBySliceAndId.get(`${sliceIndex}|${linkId}`);
+    return 1 - linkAvailability(row ?? {});
+  });
+  return round(mean(risks));
+}
+
+function repairCandidatePath({ path, activeSet, graph, linksBySliceAndId }) {
+  const originalLinkIds = splitPath(path.link_ids);
+  const originalNodes = splitPath(path.path);
+  const source = path.source || originalNodes[0] || "";
+  const sink = path.sink || originalNodes[originalNodes.length - 1] || "";
+  const originalUsable = originalLinkIds.length > 0 && originalLinkIds.every((linkId) => activeSet.has(linkId));
+  if (originalUsable) {
+    const pathLinks = unique(originalLinkIds);
+    return {
+      ...path,
+      pathLinks,
+      planning_repair_count: 0,
+      predicted_path_risk: pathRisk({ sliceIndex: path.slice_index, linkIds: pathLinks, linksBySliceAndId }),
+    };
+  }
+
+  const repaired = shortestPath(graph, source, sink);
+  if (!repaired || repaired.linkIds.length === 0) return null;
+  const pathLinks = unique(repaired.linkIds);
+  return {
+    ...path,
+    path_node_count: repaired.nodes.length,
+    path_link_count: repaired.linkIds.length,
+    covered_link_count: pathLinks.length,
+    path: repaired.nodes.join(" > "),
+    link_ids: repaired.linkIds.join(" > "),
+    pathLinks,
+    planning_repair_count: 1,
+    predicted_path_risk: pathRisk({ sliceIndex: path.slice_index, linkIds: pathLinks, linksBySliceAndId }),
+    original_unrepaired_path: path.path,
+    original_unrepaired_link_ids: path.link_ids,
+  };
+}
+
 function activeLinkIdsForPath(path, activeSet) {
+  if (Array.isArray(path.pathLinks)) return path.pathLinks.filter((linkId) => activeSet.has(linkId));
   return splitPath(path.link_ids).filter((linkId, index, list) => linkId && activeSet.has(linkId) && list.indexOf(linkId) === index);
 }
 
@@ -347,6 +501,7 @@ function selectSlicePaths({
   maxPaths,
   warmupSlices,
   windowSize,
+  graph,
 }) {
   if (candidatePaths.length === 0) return { rows: [], summary: null };
   const activeLinks = [...slicePlan.activeSet];
@@ -355,25 +510,30 @@ function selectSlicePaths({
   const basePathCount = Math.ceil(candidatePaths.length * samplingRate);
   const requestedPathCount = Math.max(minPaths, basePathCount);
   const selectedLimit = Math.min(maxPaths > 0 ? maxPaths : candidatePaths.length, candidatePaths.length);
+  const planningCandidates = candidatePaths
+    .map((path) => repairCandidatePath({ path, activeSet, graph, linksBySliceAndId }))
+    .filter(Boolean);
 
-  const scored = candidatePaths.map((path, index) => {
+  const scored = planningCandidates.map((path, index) => {
     const pathLinks = activeLinkIdsForPath(path, activeSet);
     const linkScores = pathLinks.map((linkId) => {
       const score = leverageScores.get(linkId) ?? { leverage: 1, transition_rate: 0 };
       const row = linksBySliceAndId.get(`${path.slice_index}|${linkId}`);
       const kindBonus = row?.kind === "inter-plane" ? 0.35 : row?.kind === "star-ground" ? 0.25 : 0;
+      const confidenceBonus = linkAvailability(row ?? {}) * 0.15;
       const stale = slicePosition - (selectedLastSeen.get(linkId) ?? -Infinity);
       const staleBonus = !Number.isFinite(stale) || stale > windowSize ? 0.75 : Math.max(0, stale / Math.max(windowSize, 1)) * 0.35;
-      return score.leverage + score.transition_rate * 0.8 + kindBonus + staleBonus;
+      return score.leverage + score.transition_rate * 0.8 + kindBonus + staleBonus + confidenceBonus;
     });
     const lengthPenalty = Math.log2(Math.max(numberValue(path.path_link_count, pathLinks.length), 1) + 1) * 0.04;
     const diversity = pathLinks.filter((linkId) => !selectedLastSeen.has(linkId)).length / Math.max(pathLinks.length, 1);
     const warmupBoost = slicePosition < warmupSlices ? diversity * 2 : 0;
+    const riskPenalty = numberValue(path.predicted_path_risk, 0) * 0.25;
     return {
       path,
       index,
       pathLinks,
-      score: mean(linkScores) + diversity * 0.6 + warmupBoost - lengthPenalty,
+      score: mean(linkScores) + diversity * 0.6 + warmupBoost - lengthPenalty - riskPenalty,
     };
   });
 
@@ -400,9 +560,15 @@ function selectSlicePaths({
     source_candidate_algorithm: item.path.planning_algorithm,
     topology_class_id: slicePlan.topology_class_id,
     int_mc_score: round(item.score),
+    predicted_path_risk: item.path.predicted_path_risk,
+    planning_repair_count: item.path.planning_repair_count,
     sampling_rate: samplingRate,
     target_active_link_sampling_rate: targetActiveLinkSamplingRate,
-    selection_reason: slicePosition < warmupSlices ? "warmup-diversity" : "leverage-contact-plan",
+    selection_reason: item.path.planning_repair_count > 0
+      ? "predicted-contact-local-repair"
+      : slicePosition < warmupSlices
+        ? "warmup-diversity"
+        : "leverage-predicted-contact-plan",
   }));
 
   return {
@@ -412,10 +578,13 @@ function selectSlicePaths({
       time: slicePlan.time,
       topology_class_id: slicePlan.topology_class_id,
       candidate_paths: candidatePaths.length,
+      planning_candidate_paths: planningCandidates.length,
       selected_paths: rows.length,
       active_links: activeLinks.length,
       sampled_active_links: covered.size,
       active_link_sampling_coverage: round(covered.size / Math.max(activeLinks.length, 1)),
+      repaired_candidate_paths: planningCandidates.filter((path) => numberValue(path.planning_repair_count) > 0).length,
+      selected_repaired_paths: rows.filter((row) => numberValue(row.planning_repair_count) > 0).length,
       mean_selected_score: round(mean(selected.map((item) => item.score))),
       warmup: slicePosition < warmupSlices,
     },
@@ -436,6 +605,7 @@ const rank = numberArg(args, "--rank", 5);
 const minPaths = numberArg(args, "--min-paths-per-slice", 1);
 const maxPaths = numberArg(args, "--max-paths-per-slice", 0);
 const topologyClassThreshold = numberArg(args, "--topology-class-threshold", 0.08);
+const predictedContactPlanPath = argValue(args, "--predicted-contact-plan", "");
 
 const linksPath = resolve(argValue(args, "--links", join(inputDir, "links.csv")));
 const candidatePathsPath = resolve(
@@ -444,13 +614,20 @@ const candidatePathsPath = resolve(
 
 requireFile(linksPath, "links.csv");
 requireFile(candidatePathsPath, "candidate probe paths");
+if (predictedContactPlanPath) requireFile(resolve(predictedContactPlanPath), "predicted contact plan");
 
-const [links, candidatePaths] = await Promise.all([readCsv(linksPath), readCsv(candidatePathsPath)]);
-const linksBySlice = groupBy(links, (link) => String(link.slice_index));
+const [links, candidatePaths, predictedContactPlan] = await Promise.all([
+  readCsv(linksPath),
+  readCsv(candidatePathsPath),
+  predictedContactPlanPath ? readJson(resolve(predictedContactPlanPath)) : Promise.resolve(null),
+]);
+const planningLinks = buildPlanningLinks({ truthLinks: links, predictedPlan: predictedContactPlan });
+const linksBySlice = groupBy(planningLinks, (link) => String(link.slice_index));
 const pathsBySlice = groupBy(candidatePaths, (path) => String(path.slice_index));
-const linksBySliceAndId = indexBy(links, (link) => `${link.slice_index}|${link.link_id}`);
+const linksBySliceAndId = indexBy(planningLinks, (link) => `${link.slice_index}|${link.link_id}`);
 const sliceIndexes = [...linksBySlice.keys()].sort((left, right) => Number(left) - Number(right));
-const linksById = buildLinksById(links);
+const linksById = buildLinksById(planningLinks);
+const graphsBySlice = buildGraphsBySlice(planningLinks);
 const contactPlan = buildContactPlan({ linksBySlice, sliceIndexes, classThreshold: topologyClassThreshold });
 const leverageScores = buildLeverageScores({ linksById, sliceIndexes, rank });
 const selectedLastSeen = new Map();
@@ -472,6 +649,7 @@ contactPlan.perSlice.forEach((slicePlan, slicePosition) => {
     maxPaths,
     warmupSlices,
     windowSize,
+    graph: graphsBySlice.get(String(slicePlan.slice_index)),
   });
   selectedRows.push(...result.rows);
   if (result.summary) summaryRows.push(result.summary);
@@ -488,18 +666,22 @@ const report = {
     links_csv: linksPath,
     candidate_paths_csv: candidatePathsPath,
     candidate_algorithm: candidateAlgorithm,
+    predicted_contact_plan_json: predictedContactPlanPath ? resolve(predictedContactPlanPath) : "",
   },
   planning_algorithm: algorithm,
   method: {
     origin: "INT-MC path leverage sampling adapted for predictable LEO contact plans",
     satellite_adaptations: [
       "contact-plan topology classes from active link masks",
+      "predicted contact plan uses first-stage orbital and link-budget parameters instead of business load state",
       "active topology mask separated from unobserved telemetry mask",
       "deterministic warmup instead of random sampling",
       "rolling stale-link bonus for dynamic LEO links",
+      "local path repair when a predicted contact gap invalidates an old candidate route",
       "path selection runs on ground-side planning data, not on satellites",
     ],
     mininet_code_not_ported: true,
+    uses_predicted_contact_plan: Boolean(predictedContactPlan),
   },
   parameters: {
     sampling_rate: samplingRate,
@@ -510,11 +692,16 @@ const report = {
     min_paths_per_slice: minPaths,
     max_paths_per_slice: maxPaths,
     topology_class_threshold: topologyClassThreshold,
+    prediction_horizon_slices: predictedContactPlan?.engineering_parameters?.prediction_horizon_slices ?? null,
+    refresh_slices: predictedContactPlan?.engineering_parameters?.refresh_slices ?? null,
+    completion_window_slices: predictedContactPlan?.engineering_parameters?.completion_window_slices ?? null,
   },
   contact_plan: {
+    source_schema_version: predictedContactPlan?.schema_version ?? "stage2-link-truth-derived-contact-plan-v1",
     slice_count: contactPlan.perSlice.length,
     topology_class_count: contactPlan.classes.length,
     classes: contactPlan.classes,
+    prediction_evaluation: predictedContactPlan?.evaluation ?? null,
   },
   coverage: {
     candidate_paths: candidatePaths.length,
@@ -523,6 +710,8 @@ const report = {
     sampled_active_link_samples: sampledActiveLinkSamples,
     active_link_sampling_coverage: round(sampledActiveLinkSamples / Math.max(activeLinkSamples, 1)),
     mean_selected_paths_per_slice: round(mean(summaryRows.map((row) => row.selected_paths))),
+    repaired_candidate_paths: summaryRows.reduce((total, row) => total + numberValue(row.repaired_candidate_paths), 0),
+    selected_repaired_paths: summaryRows.reduce((total, row) => total + numberValue(row.selected_repaired_paths), 0),
   },
   per_slice: summaryRows,
 };
@@ -549,4 +738,3 @@ console.log(JSON.stringify({
   rank,
   windowSize,
 }, null, 2));
-

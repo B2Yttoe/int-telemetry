@@ -194,7 +194,7 @@ LEO 动态拓扑下的关键改动：
 运行方式：
 
 ```powershell
-npm run int:experiment -- --tasks examples/datasets/stage1-standard-traffic.csv --out stage2-int/runs/int-mc-smoke --orbit tle-sgp4 --mode operational --algorithm int-mc --int-mc-sampling-rate 0.25 --int-mc-rank 5 --int-mc-window 12
+npm run int:experiment -- --tasks examples/datasets/stage1-standard-traffic.csv --out stage2-int/runs/int-mc-smoke --orbit tle-sgp4 --mode operational --algorithm int-mc --int-mc-sampling-rate 0.25 --int-mc-rank 5
 ```
 
 主要输出：
@@ -246,3 +246,40 @@ node stage2-int/tools/ground-oam-reconstructor.mjs --input exports/tmp-highload-
 ```bash
 node stage2-int/tools/audit-full-telemetry-coverage.mjs --input exports/tmp-highload-check --ground stage2-int/outputs/tmp-highload-check/ground-probe-path-balance
 ```
+
+## 7. LEO-INT-MC 的拓扑预测折中方案
+
+当前 `int-mc` 不再把每个时间片都当成完全独立的新拓扑重新处理，而是先在 Ground OAM/地面控制侧生成预测 contact plan：
+
+```powershell
+node stage2-int/tools/predict-contact-plan.mjs --input <stage1-truth-dir> --out <stage2-dir>
+```
+
+该 contact plan 使用第一阶段已经导出的轨道与链路预算参数，包括时间片长度、代表性轨道高度、距离阈值、地球遮挡、极区/物理限制、SNR/SINR、容量和指向可用比例。它不会使用业务负载状态来推断链路是否 active，也不会在 INT 运行时读取全网真值来填充未知状态。
+
+默认窗口由第一阶段参数自动推导：
+
+| 参数 | 当前默认推导 | 含义 |
+|---|---:|---|
+| `step_minutes` | 5 | 第一阶段每个时间片长度 |
+| `completion_window_slices` | 约 18 | 约一个 LEO 轨道周期，用于矩阵补全窗口 |
+| `prediction_horizon_slices` | 约 36 | 约两个轨道窗口，用于提前规划 |
+| `refresh_slices` | 约 6 | 约 30 分钟刷新一次预测计划 |
+
+这样做的核心原因是：LEO 拓扑变化很快，但变化由星历决定，具有强可预测性。用星历/物理约束先得到 `slice × link` 的可接触掩码后，INT-MC 只在物理可接触但未观测的链路上补全状态，物理断链保持 `topology-down`。路径选择阶段如果发现候选 probe path 在预测 contact plan 中断开，会在当前预测 active 图上做一次局部最短路修补，而不是重算全局策略。
+
+新增产物：
+
+```text
+predicted-contact-plan.json
+predicted-contact-plan.csv
+predicted-contact-plan-summary.csv
+predicted-contact-plan-evaluation.json
+```
+
+验收重点：
+
+- `int-experiment-manifest.json` 中存在 `int_pipeline.contact_plan_prediction`。
+- `int-mc-evaluation.json` 中 `active_mask_from_predicted_contact_plan = true`。
+- `predicted-contact-plan-evaluation.json` 给出 precision、recall、accuracy、mean slice Jaccard 和每片 topology edit distance。
+- 卫星端不运行矩阵补全或全局拓扑预测；预测、路径抽样和矩阵补全都位于 Ground OAM/地面实验侧。

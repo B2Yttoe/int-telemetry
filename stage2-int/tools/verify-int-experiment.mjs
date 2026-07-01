@@ -184,10 +184,15 @@ const requiredFiles = {
   intMcMatrixSummary: resolveFromRun(runDir, manifest.outputs?.int_mc_matrix_summary_csv, "stage2-int/ground-probe-int-mc/int-mc-matrix-summary.csv"),
   intMcEvaluation: resolveFromRun(runDir, manifest.outputs?.int_mc_evaluation_json, "stage2-int/ground-probe-int-mc/int-mc-evaluation.json"),
   intMcContactPlan: resolveFromRun(runDir, manifest.outputs?.int_mc_contact_plan_json, "stage2-int/int-mc-contact-plan-int-mc.json"),
+  predictedContactPlanJson: resolveFromRun(runDir, manifest.outputs?.predicted_contact_plan_json, "stage2-int/predicted-contact-plan.json"),
+  predictedContactPlanCsv: resolveFromRun(runDir, manifest.outputs?.predicted_contact_plan_csv, "stage2-int/predicted-contact-plan.csv"),
+  predictedContactPlanSummary: resolveFromRun(runDir, manifest.outputs?.predicted_contact_plan_summary_csv, "stage2-int/predicted-contact-plan-summary.csv"),
+  predictedContactPlanEvaluation: resolveFromRun(runDir, manifest.outputs?.predicted_contact_plan_evaluation_json, "stage2-int/predicted-contact-plan-evaluation.json"),
 };
 
 Object.entries(requiredFiles).forEach(([label, path]) => {
   if (!isIntMcRun && label.startsWith("intMc")) return;
+  if (!isIntMcRun && label.startsWith("predictedContactPlan")) return;
   checkPath(`file exists: ${label}`, path);
 });
 if (manifest.input?.tasks_snapshot_path) {
@@ -208,7 +213,11 @@ const csvExpectations = [
   ["probe reconstructed node rows", requiredFiles.reconstructedNodes, manifest.stage1?.counts?.nodes],
   ["probe reconstructed link rows", requiredFiles.reconstructedLinks, manifest.stage1?.counts?.links],
   ...(isIntMcRun
-    ? [["int-mc reconstructed link rows", requiredFiles.intMcReconstructedLinks, manifest.stage1?.counts?.links]]
+    ? [
+        ["int-mc reconstructed link rows", requiredFiles.intMcReconstructedLinks, manifest.stage1?.counts?.links],
+        ["predicted contact plan rows", requiredFiles.predictedContactPlanCsv, manifest.stage1?.counts?.links],
+        ["predicted contact plan summary rows", requiredFiles.predictedContactPlanSummary, manifest.stage1?.counts?.metrics],
+      ]
     : []),
 ];
 
@@ -229,6 +238,7 @@ const deliverables = existsSync(requiredFiles.deliverablesJson) ? await readJson
 const processVisualization = existsSync(requiredFiles.processVisualizationJson) ? await readJson(requiredFiles.processVisualizationJson) : {};
 const accuracyReport = existsSync(requiredFiles.accuracyReportJson) ? await readJson(requiredFiles.accuracyReportJson) : {};
 const intMcEvaluation = isIntMcRun && existsSync(requiredFiles.intMcEvaluation) ? await readJson(requiredFiles.intMcEvaluation) : {};
+const predictedContactPlan = isIntMcRun && existsSync(requiredFiles.predictedContactPlanJson) ? await readJson(requiredFiles.predictedContactPlanJson) : {};
 
 check("traffic OAM boundary", trafficEvaluation.boundary?.runtime_uses_only_delivered_int_reports === true, formatValue(trafficEvaluation.boundary?.runtime_uses_only_delivered_int_reports));
 check("probe OAM boundary", probeEvaluation.boundary?.runtime_uses_only_delivered_int_reports === true, formatValue(probeEvaluation.boundary?.runtime_uses_only_delivered_int_reports));
@@ -280,6 +290,14 @@ if (isIntMcRun) {
   check("int-mc evaluation schema", intMcEvaluation.schema_version === "stage2-leo-int-mc-evaluation-v1", formatValue(intMcEvaluation.schema_version));
   check("int-mc ground-side boundary", intMcEvaluation.boundary?.matrix_completion_runs_at_ground_oam === true, formatValue(intMcEvaluation.boundary?.matrix_completion_runs_at_ground_oam));
   check("int-mc topology down not completed", intMcEvaluation.boundary?.topology_down_not_completed === true, formatValue(intMcEvaluation.boundary?.topology_down_not_completed));
+  check("predicted contact plan schema", predictedContactPlan.schema_version === "stage2-predicted-contact-plan-v1", formatValue(predictedContactPlan.schema_version));
+  check("predicted contact plan no business load state", predictedContactPlan.prediction_model?.uses_business_load_state === false, formatValue(predictedContactPlan.prediction_model?.uses_business_load_state));
+  check("predicted contact plan no runtime truth state", predictedContactPlan.prediction_model?.uses_truth_for_runtime_state === false, formatValue(predictedContactPlan.prediction_model?.uses_truth_for_runtime_state));
+  check("predicted contact plan entries", (predictedContactPlan.entries?.length ?? 0) === manifest.stage1?.counts?.links, `actual=${formatValue(predictedContactPlan.entries?.length)}, expected=${formatValue(manifest.stage1?.counts?.links)}`);
+  check("predicted contact plan pipeline completed", manifest.int_pipeline?.contact_plan_prediction?.ok === true, formatValue(manifest.int_pipeline?.contact_plan_prediction?.ok));
+  check("predicted contact precision", nearlyAtLeast(predictedContactPlan.evaluation?.precision, 0.95), formatValue(predictedContactPlan.evaluation?.precision));
+  check("predicted contact recall", nearlyAtLeast(predictedContactPlan.evaluation?.recall, 0.95), formatValue(predictedContactPlan.evaluation?.recall));
+  check("int-mc uses predicted contact mask", intMcEvaluation.boundary?.active_mask_from_predicted_contact_plan === true, formatValue(intMcEvaluation.boundary?.active_mask_from_predicted_contact_plan));
   check("int-mc active completion coverage", nearlyAtLeast(manifest.accuracy?.int_mc?.active_link_completion_coverage, 1), formatValue(manifest.accuracy?.int_mc?.active_link_completion_coverage));
   check("int-mc unknown link samples", manifest.accuracy?.int_mc?.unknown_link_samples === 0, formatValue(manifest.accuracy?.int_mc?.unknown_link_samples));
   check("int-mc has inferred links", (manifest.accuracy?.int_mc?.inferred_link_samples ?? 0) > 0, formatValue(manifest.accuracy?.int_mc?.inferred_link_samples));

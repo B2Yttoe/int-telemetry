@@ -6,21 +6,28 @@
   "sampling": {
     "sampling_rate": 0.25,
     "target_active_link_sampling_rate": 0.25,
-    "warmup_slices": 3,
-    "window_size": 12,
+    "warmup_slices": "auto: half of refresh_slices, at least 2",
+    "window_size": "auto: about one LEO orbital period from stage-one step_minutes",
+    "prediction_horizon_slices": "auto: about two orbital windows, capped by the run slice count",
+    "refresh_slices": "auto: about 30 minutes / stage-one step_minutes",
     "rank": 5,
     "iterations": 12,
     "topology_class_threshold": 0.08,
     "min_paths_per_slice": 1
   },
   "leo_adaptations": {
-    "contact_plan": "Use predicted active-link masks from TLE/SGP4-derived topology snapshots.",
+    "contact_plan": "Generate predicted active-link masks from stage-one orbital/link-budget parameters before INT-MC path selection.",
+    "contact_plan_outputs": "predicted-contact-plan.json/csv/summary/evaluation record horizon, refresh, window, precision, recall and per-slice topology error.",
     "topology_classes": "Reuse path templates across similar topology snapshots instead of recomputing every slice from scratch.",
+    "local_repair": "Repair candidate probe paths on the predicted active graph when a future contact gap invalidates an old route.",
     "active_observed_masks": "Separate physically unavailable links from available-but-unobserved links.",
     "completion_scope": "Complete only active and unobserved links; topology-down links stay down.",
     "execution_location": "Matrix completion runs at Ground OAM, not on satellites."
   },
   "outputs": {
+    "predicted_contact_plan": "predicted-contact-plan.json",
+    "predicted_contact_plan_csv": "predicted-contact-plan.csv",
+    "predicted_contact_plan_evaluation": "predicted-contact-plan-evaluation.json",
     "selected_probe_paths": "probe-paths-int-mc.csv",
     "selection_report": "probe-coverage-int-mc.json",
     "contact_plan": "int-mc-contact-plan-int-mc.json",

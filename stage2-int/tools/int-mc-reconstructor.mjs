@@ -122,6 +122,17 @@ async function readCsv(path) {
   return parseCsv(await readFile(path, "utf8"));
 }
 
+async function readJson(path) {
+  return JSON.parse(await readFile(path, "utf8"));
+}
+
+function contactActiveFor(contactByKey, truthRow, sliceIndex, linkId) {
+  if (contactByKey) {
+    return boolValue(contactByKey.get(`${sliceIndex}|${linkId}`)?.predicted_active);
+  }
+  return boolValue(truthRow?.is_active);
+}
+
 function multiplyMatrixVector(matrix, vector) {
   return matrix.map((row) => row.reduce((total, value, index) => total + value * vector[index], 0));
 }
@@ -209,9 +220,9 @@ function lowRankApprox(matrix, activeMask, rank) {
   });
 }
 
-function completeMetricMatrix({ metric, linkIds, sliceIndexes, truthByKey, observedByKey, rank, iterations }) {
+function completeMetricMatrix({ metric, linkIds, sliceIndexes, truthByKey, observedByKey, contactByKey, rank, iterations }) {
   const activeMask = linkIds.map((linkId) =>
-    sliceIndexes.map((sliceIndex) => boolValue(truthByKey.get(`${sliceIndex}|${linkId}`)?.is_active)),
+    sliceIndexes.map((sliceIndex) => contactActiveFor(contactByKey, truthByKey.get(`${sliceIndex}|${linkId}`), sliceIndex, linkId)),
   );
   const observedMask = linkIds.map((linkId) =>
     sliceIndexes.map((sliceIndex) => boolValue(observedByKey.get(`${sliceIndex}|${linkId}`)?.observed)),
@@ -427,16 +438,25 @@ const outputDir = resolve(argValue(args, "--out", groundDir));
 const rank = numberArg(args, "--rank", 5);
 const iterations = numberArg(args, "--iterations", 12);
 const windowSize = numberArg(args, "--window-size", 12);
+const predictedContactPlanPath = argValue(args, "--predicted-contact-plan", "");
 
 const linksPath = resolve(argValue(args, "--links", join(inputDir, "links.csv")));
 const groundLinksPath = resolve(argValue(args, "--ground-links", join(groundDir, "ground-reconstructed-links.csv")));
 
 requireFile(linksPath, "links.csv");
 requireFile(groundLinksPath, "ground reconstructed links");
+if (predictedContactPlanPath) requireFile(resolve(predictedContactPlanPath), "predicted contact plan");
 
-const [truthLinks, observedLinks] = await Promise.all([readCsv(linksPath), readCsv(groundLinksPath)]);
+const [truthLinks, observedLinks, predictedContactPlan] = await Promise.all([
+  readCsv(linksPath),
+  readCsv(groundLinksPath),
+  predictedContactPlanPath ? readJson(resolve(predictedContactPlanPath)) : Promise.resolve(null),
+]);
 const truthByKey = indexBy(truthLinks, (link) => `${link.slice_index}|${link.link_id}`);
 const observedByKey = indexBy(observedLinks, (link) => `${link.slice_index}|${link.link_id}`);
+const contactByKey = predictedContactPlan
+  ? indexBy(predictedContactPlan.entries ?? [], (link) => `${link.slice_index}|${link.link_id}`)
+  : null;
 const sliceIndexes = [...new Set(truthLinks.map((link) => String(link.slice_index)))].sort((left, right) => Number(left) - Number(right));
 const linkIds = [...new Set(truthLinks.map((link) => link.link_id))].sort();
 const firstTruthByLink = indexBy(truthLinks, (link) => link.link_id);
@@ -451,6 +471,7 @@ metrics.forEach((metric) => {
     sliceIndexes,
     truthByKey,
     observedByKey,
+    contactByKey,
     rank,
     iterations,
   });
@@ -466,7 +487,7 @@ sliceIndexes.forEach((sliceIndex) => {
     const truth = truthByKey.get(`${sliceIndex}|${linkId}`);
     if (!truth) return;
     const observed = observedByKey.get(`${sliceIndex}|${linkId}`);
-    const contactActive = boolValue(truth.is_active);
+    const contactActive = contactActiveFor(contactByKey, truth, sliceIndex, linkId);
     const directlyObserved = boolValue(observed?.observed);
     const catalog = firstTruthByLink.get(linkId) ?? truth;
     const key = `${sliceIndex}|${linkId}`;
@@ -521,7 +542,7 @@ sliceIndexes.forEach((sliceIndex) => {
       int_mc_rank: rank,
       int_mc_iterations: iterations,
       int_mc_window_size: windowSize,
-      active_mask_source: "leo-contact-plan",
+      active_mask_source: contactByKey ? "predicted-contact-plan" : "leo-contact-plan",
     };
     reconstructionRows.push(row);
 
@@ -557,11 +578,12 @@ const evaluation = {
     ground_oam_dir: groundDir,
     truth_links_csv: linksPath,
     observed_ground_links_csv: groundLinksPath,
+    predicted_contact_plan_json: predictedContactPlanPath ? resolve(predictedContactPlanPath) : "",
   },
   boundary: {
     matrix_completion_runs_at_ground_oam: true,
     satellites_run_no_matrix_completion: true,
-    active_mask_from_predicted_contact_plan: true,
+    active_mask_from_predicted_contact_plan: Boolean(contactByKey),
     observed_mask_from_delivered_int_reports: true,
     truth_metrics_used_only_for_evaluation: true,
     topology_down_not_completed: true,
@@ -571,8 +593,18 @@ const evaluation = {
     rank,
     iterations,
     window_size: windowSize,
+    prediction_horizon_slices: predictedContactPlan?.engineering_parameters?.prediction_horizon_slices ?? null,
+    refresh_slices: predictedContactPlan?.engineering_parameters?.refresh_slices ?? null,
+    completion_window_slices: predictedContactPlan?.engineering_parameters?.completion_window_slices ?? null,
     metrics: metrics.map((metric) => metric.name),
   },
+  contact_plan_prediction: predictedContactPlan
+    ? {
+        schema_version: predictedContactPlan.schema_version,
+        evaluation: predictedContactPlan.evaluation,
+        topology_class_count: predictedContactPlan.topology_classes?.length ?? 0,
+      }
+    : null,
   matrix_summaries: matrixSummaries,
 };
 
@@ -597,4 +629,3 @@ console.log(JSON.stringify({
   activeLinkCompletionCoverage: evaluation.reconstruction.active_link_completion_coverage,
   statusAccuracyAllLinks: evaluation.reconstruction.status_accuracy_all_links,
 }, null, 2));
-

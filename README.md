@@ -529,8 +529,8 @@ npm run generate:radar-traffic
 
 当前项目已经具备继续扩展的基础。后续优先方向包括：
 
-1. **INT-MC 接入**  
-   使用矩阵补全降低全网遥测开销。需要针对 LEO 动态拓扑引入 contact plan、滑动窗口、active mask 和路径模板复用。
+1. **INT-MC 低开销遥测优化**
+   当前已经接入 LEO-INT-MC，后续重点是进一步评估不同采样率、预测误差、真实 TLE 快照和更大星座规模下的补全精度与遥测开销。
 
 2. **机器学习预测数据集**  
    使用每个时间片的节点/链路状态训练模型，预测下一时间片的负载、拥塞、电量或链路状态。
@@ -541,7 +541,36 @@ npm run generate:radar-traffic
 4. **更严格协议级实现**  
    如果需要与真实网络协议栈对齐，可进一步引入 ns-3、P4 或容器网络仿真。
 
-## 12. 文档归档
+## 12. LEO-INT-MC 拓扑预测与效率折中
+
+当前第二阶段 `int-mc` 已经加入预测 contact plan，不再假设每个时间片都从零重算全局拓扑。运行 `npm run int:experiment -- --algorithm int-mc` 时，流水线会先根据第一阶段导出的轨道和链路物理参数生成：
+
+```text
+stage2-int/predicted-contact-plan.json
+stage2-int/predicted-contact-plan.csv
+stage2-int/predicted-contact-plan-summary.csv
+stage2-int/predicted-contact-plan-evaluation.json
+```
+
+默认参数会自动贴合第一阶段时间片设置：当前 5 分钟一个时间片、LEO 约 90 到 95 分钟一圈，因此矩阵补全窗口约为 18 个时间片，预测 horizon 约为 36 个时间片，预测计划约每 6 个时间片刷新一次。这样既利用了星历带来的可预测性，又避免在每个时间片都进行昂贵的全局重算。
+
+运行边界如下：
+
+- 预测 contact plan 只给出链路物理可接触先验，不填充链路利用率、拥塞、CPU、电量等状态。
+- INT-MC 仍然只根据成功下传的 INT reports 构造 observed mask。
+- 物理上预测为 down 的链路保持 `topology-down`，不会被矩阵补全。
+- 物理可接触但没有被 INT 观测到的链路才进入矩阵补全。
+- 第一阶段真值只用于实验结束后的 precision、recall、Jaccard、误差和准确率评估。
+
+一次标准命令示例：
+
+```powershell
+npm run int:experiment -- --tasks examples/datasets/stage1-standard-traffic.csv --out stage2-int/runs/int-mc-contact-plan-smoke --orbit tle-sgp4 --mode operational --algorithm int-mc
+```
+
+在最新 smoke run 中，48 个时间片下生成 5760 个链路样本，预测 contact plan 的 precision/recall/accuracy 均为 1，INT-MC 对 4971 个 active 链路样本完成 100% active-link completion，其中 3862 个来自直接 INT 观测，1109 个由矩阵补全推断得到。
+
+## 13. 文档归档
 
 为保持根目录简洁，旧版说明文件和截图已经归档到：
 

@@ -116,6 +116,12 @@ function numberValue(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function resolveAutoNumber(value, fallback) {
+  if (value === undefined || value === null || value === "" || String(value).toLowerCase() === "auto") return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function boolValue(value) {
   if (typeof value === "boolean") return value;
   const text = String(value).toLowerCase();
@@ -588,9 +594,13 @@ function buildDeliverables(manifest, verification = null) {
           matrix_summary_csv: manifest.outputs.int_mc_matrix_summary_csv,
           evaluation_json: manifest.outputs.int_mc_evaluation_json,
           contact_plan_json: manifest.outputs.int_mc_contact_plan_json,
+          predicted_contact_plan_json: manifest.outputs.predicted_contact_plan_json,
+          predicted_contact_plan_csv: manifest.outputs.predicted_contact_plan_csv,
+          predicted_contact_plan_summary_csv: manifest.outputs.predicted_contact_plan_summary_csv,
+          predicted_contact_plan_evaluation_json: manifest.outputs.predicted_contact_plan_evaluation_json,
           selection_report_json: join(stage2Dir, `probe-coverage-${algorithm}.json`),
           boundary: {
-            active_mask_source: "LEO contact plan",
+            active_mask_source: "predicted LEO contact plan",
             observed_mask_source: "delivered INT reports",
             topology_down_not_completed: true,
           },
@@ -666,6 +676,8 @@ function buildDeliverablesMarkdown(deliverables) {
           reportLine("INT-MC 补全链路 CSV", deliverables.int_mc_outputs.reconstructed_links_csv),
           reportLine("INT-MC active link completion", formatPercent(primary.coverage.int_mc_active_link_completion_coverage)),
           reportLine("INT-MC inferred active rate", formatPercent(primary.coverage.int_mc_inferred_rate_on_active)),
+          reportLine("预测 contact plan JSON", deliverables.int_mc_outputs.predicted_contact_plan_json),
+          reportLine("预测 contact plan 误差评估", deliverables.int_mc_outputs.predicted_contact_plan_evaluation_json),
           reportLine("INT-MC evaluation", deliverables.int_mc_outputs.evaluation_json),
         ]
       : []),
@@ -869,6 +881,8 @@ function buildAccuracyReport(manifest, verification = null) {
       metrics: probe,
       int_mc_metrics: intMc,
       int_mc_evaluation_json: manifest.outputs.int_mc_evaluation_json,
+      predicted_contact_plan_json: manifest.outputs.predicted_contact_plan_json,
+      predicted_contact_plan_evaluation_json: manifest.outputs.predicted_contact_plan_evaluation_json,
       coverage_audit_summary: auditSummary,
       per_slice_coverage: Array.isArray(audit.slices) ? audit.slices : [],
     },
@@ -931,6 +945,10 @@ function buildAccuracyReportMarkdown(report) {
           reportLine("topology-down link samples", formatValue(intMc.topology_down_link_samples)),
           reportLine("unknown link samples", formatValue(intMc.unknown_link_samples)),
           reportLine("status accuracy all links", formatPercent(intMc.status_accuracy_all_links)),
+          reportLine("contact plan precision", formatPercent(intMc.contact_plan_precision)),
+          reportLine("contact plan recall", formatPercent(intMc.contact_plan_recall)),
+          reportLine("contact plan mean slice Jaccard", formatPercent(intMc.contact_plan_mean_slice_jaccard)),
+          reportLine("contact plan evaluation", report.primary_probe_int.predicted_contact_plan_evaluation_json),
           reportLine("evaluation JSON", report.primary_probe_int.int_mc_evaluation_json),
         ]
       : []),
@@ -990,8 +1008,10 @@ const intMcCandidateAlgorithm = argValue(args, "--int-mc-candidate-algorithm", "
 const intMcSamplingRate = argValue(args, "--int-mc-sampling-rate", "0.25");
 const intMcTargetActiveLinkSamplingRate = argValue(args, "--int-mc-target-active-link-sampling-rate", intMcSamplingRate);
 const intMcRank = argValue(args, "--int-mc-rank", "5");
-const intMcWindowSize = argValue(args, "--int-mc-window", "12");
-const intMcWarmupSlices = argValue(args, "--int-mc-warmup-slices", "3");
+const intMcWindowSize = argValue(args, "--int-mc-window", "auto");
+const intMcWarmupSlices = argValue(args, "--int-mc-warmup-slices", "auto");
+const intMcPredictionHorizonSlices = argValue(args, "--int-mc-prediction-horizon-slices", "auto");
+const intMcRefreshSlices = argValue(args, "--int-mc-refresh-slices", "auto");
 const intMcIterations = argValue(args, "--int-mc-iterations", "12");
 const includeFullJson = hasArg(args, "--full-json");
 const skipVerify = hasArg(args, "--skip-verify");
@@ -1061,6 +1081,34 @@ if (includeFullJson) exportArgs.push("--full-json");
 
 const stage1Export = parseLastJson((await runNode(exportArgs[0], exportArgs.slice(1))).stdout, "stage1 export");
 
+const contactPrediction = isIntMc
+  ? parseLastJson(
+      (
+        await runNode("stage2-int/tools/predict-contact-plan.mjs", [
+          "--input",
+          stage1Dir,
+          "--out",
+          stage2Dir,
+          ...(String(intMcPredictionHorizonSlices).toLowerCase() === "auto" ? [] : ["--horizon-slices", intMcPredictionHorizonSlices]),
+          ...(String(intMcRefreshSlices).toLowerCase() === "auto" ? [] : ["--refresh-slices", intMcRefreshSlices]),
+          ...(String(intMcWindowSize).toLowerCase() === "auto" ? [] : ["--completion-window-slices", intMcWindowSize]),
+        ])
+      ).stdout,
+      "predicted contact plan",
+    )
+  : null;
+const predictedContactPlanPath = isIntMc ? join(stage2Dir, "predicted-contact-plan.json") : "";
+const predictedContactPlan = isIntMc ? await readJson(predictedContactPlanPath) : null;
+const intMcEngineering = predictedContactPlan?.engineering_parameters ?? {};
+const resolvedIntMcWindowSize = String(resolveAutoNumber(intMcWindowSize, intMcEngineering.completion_window_slices ?? 12));
+const resolvedIntMcRefreshSlices = String(resolveAutoNumber(intMcRefreshSlices, intMcEngineering.refresh_slices ?? 6));
+const resolvedIntMcPredictionHorizonSlices = String(
+  resolveAutoNumber(intMcPredictionHorizonSlices, intMcEngineering.prediction_horizon_slices ?? stage1Export.counts?.metrics ?? 0),
+);
+const resolvedIntMcWarmupSlices = String(
+  resolveAutoNumber(intMcWarmupSlices, Math.max(2, Math.ceil(Number(resolvedIntMcRefreshSlices) / 2))),
+);
+
 const trafficInt = parseLastJson(
   (
     await runNode("stage2-int/tools/offline-int-mvp.mjs", [
@@ -1108,9 +1156,11 @@ const intMcSelection = isIntMc
           "--rank",
           intMcRank,
           "--window-size",
-          intMcWindowSize,
+          resolvedIntMcWindowSize,
           "--warmup-slices",
-          intMcWarmupSlices,
+          resolvedIntMcWarmupSlices,
+          "--predicted-contact-plan",
+          predictedContactPlanPath,
         ])
       ).stdout,
       "leo int-mc path selector",
@@ -1202,9 +1252,11 @@ const intMcReconstruction = isIntMc
           "--rank",
           intMcRank,
           "--window-size",
-          intMcWindowSize,
+          resolvedIntMcWindowSize,
           "--iterations",
           intMcIterations,
+          "--predicted-contact-plan",
+          predictedContactPlanPath,
         ])
       ).stdout,
       "leo int-mc reconstructor",
@@ -1254,9 +1306,14 @@ const manifest = {
           sampling_rate: Number(intMcSamplingRate),
           target_active_link_sampling_rate: Number(intMcTargetActiveLinkSamplingRate),
           rank: Number(intMcRank),
-          window_size: Number(intMcWindowSize),
-          warmup_slices: Number(intMcWarmupSlices),
+          window_size: Number(resolvedIntMcWindowSize),
+          warmup_slices: Number(resolvedIntMcWarmupSlices),
+          prediction_horizon_slices: Number(resolvedIntMcPredictionHorizonSlices),
+          refresh_slices: Number(resolvedIntMcRefreshSlices),
           iterations: Number(intMcIterations),
+          predicted_contact_plan_path: predictedContactPlanPath,
+          contact_plan_precision: contactPrediction?.precision ?? null,
+          contact_plan_recall: contactPrediction?.recall ?? null,
         }
       : null,
     validation: {
@@ -1277,6 +1334,7 @@ const manifest = {
   int_pipeline: {
     traffic_int: trafficInt,
     probe_planning: probePlanning,
+    contact_plan_prediction: contactPrediction,
     int_mc_selection: intMcSelection,
     reporting,
     probe_int: probeInt,
@@ -1325,6 +1383,10 @@ const manifest = {
           topology_down_link_samples: intMcEvaluation.reconstruction.topology_down_link_samples,
           unknown_link_samples: intMcEvaluation.reconstruction.unknown_link_samples,
           status_accuracy_all_links: intMcEvaluation.reconstruction.status_accuracy_all_links,
+          contact_plan_precision: predictedContactPlan?.evaluation?.precision ?? null,
+          contact_plan_recall: predictedContactPlan?.evaluation?.recall ?? null,
+          contact_plan_accuracy: predictedContactPlan?.evaluation?.accuracy ?? null,
+          contact_plan_mean_slice_jaccard: predictedContactPlan?.evaluation?.mean_slice_jaccard ?? null,
           metrics: intMcEvaluation.metrics,
         }
       : null,
@@ -1360,6 +1422,10 @@ const manifest = {
     int_mc_matrix_summary_csv: isIntMc ? join(probeGroundDir, "int-mc-matrix-summary.csv") : "",
     int_mc_evaluation_json: isIntMc ? join(probeGroundDir, "int-mc-evaluation.json") : "",
     int_mc_contact_plan_json: isIntMc ? join(stage2Dir, `int-mc-contact-plan-${algorithm}.json`) : "",
+    predicted_contact_plan_json: isIntMc ? predictedContactPlanPath : "",
+    predicted_contact_plan_csv: isIntMc ? join(stage2Dir, "predicted-contact-plan.csv") : "",
+    predicted_contact_plan_summary_csv: isIntMc ? join(stage2Dir, "predicted-contact-plan-summary.csv") : "",
+    predicted_contact_plan_evaluation_json: isIntMc ? join(stage2Dir, "predicted-contact-plan-evaluation.json") : "",
   },
 };
 
