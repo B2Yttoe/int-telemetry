@@ -110,6 +110,8 @@ const checks = [
   [
     "business trace csv includes causal columns",
     payload.taskTraceCsv.includes("bottleneck_link_id") &&
+      payload.taskTraceCsv.includes("estimated_end_to_end_latency_ms") &&
+      payload.taskTraceCsv.includes("delivery_state") &&
       payload.linkImpactCsv.includes("sinr_db") &&
       payload.nodeImpactCsv.includes("forwarding_cpu_percent"),
   ],

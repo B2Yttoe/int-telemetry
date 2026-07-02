@@ -179,7 +179,7 @@ try {
       (item) => item.label === "数据集指纹" && item.value === "e875b03a",
     ),
     "default normal truth fingerprint is stable": desktop.fingerprints.some(
-      (item) => item.label === "真值指纹" && item.value === "17618a77",
+      (item) => item.label === "真值指纹" && item.value === "0f5fff04",
     ),
     "truth panel is present": desktop.has_truth_panel,
     "business trace export buttons are present": expectedExportButtons.every((button) =>

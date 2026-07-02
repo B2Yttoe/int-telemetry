@@ -97,6 +97,8 @@ LEO 卫星网络具有强动态性：
 | 合成 TLE + SGP4 | 保持 Walker 结构，同时使用 SGP4 传播位置。 |
 | 真实 TLE + SGP4 | 接入 CelesTrak GP/OMM 快照，使用真实公开轨道数据传播。 |
 
+当前默认交互星座已经调整为 Starlink 主壳层近似参数：`8x8` 轻量 Walker-Star、约 `550 km` 高度、约 `53°` 倾角，适合仪表盘实时观察和常规验收。仪表盘的轨道模型切换中也提供了 `真实 TLE + SGP4`，会加载内置 CelesTrak Starlink 主壳层 `8x8` 快照进行可视化。需要更接近真实规模时，使用 `real-tle-sgp4` 加载 CelesTrak Starlink 快照；项目内置主壳层 `8x8`、主壳层 `47x14` 和最大规模对照 `72x22` 快照。
+
 当前真实 TLE 快照示例位于：
 
 ```text
@@ -106,8 +108,9 @@ data/tle-snapshots/
 常用快照包括：
 
 ```text
-celestrak-starlink-real-walker-8x8.json
-celestrak-starlink-real-walker-72x22.json
+celestrak-starlink-main-550km-53deg-walker-8x8.json      # 53°/550 km 主壳层轻量可视化
+celestrak-starlink-main-550km-53deg-walker-47x14.json    # 53°/550 km 主壳层较大规模数据集
+celestrak-starlink-real-walker-72x22.json                # 当前公开快照最大规模对照，约 43°/490 km
 ```
 
 ### 3.2 节点状态
@@ -177,8 +180,10 @@ examples/datasets/
 ```text
 stage1-standard-traffic.csv
 stage1-ml-48-traffic.csv
-radar-calibrated-starlink-8x8-48-traffic.csv
-radar-calibrated-starlink-72x22-48-traffic.csv
+radar-calibrated-starlink-main-8x8-48-traffic.csv
+radar-calibrated-starlink-main-47x14-48-traffic.csv
+real-starlink-main-8x8-ml-48-traffic.csv
+real-starlink-main-47x14-ml-48-traffic.csv
 ```
 
 业务数据集用于描述在某个时间片生成的任务流量，包括源节点、目的节点、带宽、计算需求、持续时间、优先级等。模型会根据路由和链路状态计算这些业务对卫星网络的影响。
@@ -235,7 +240,7 @@ stage2-int/
 运行示例：
 
 ```bash
-npm run int:experiment -- --tasks examples/datasets/stage1-standard-traffic.csv --out stage2-int/runs/int-mc-smoke --orbit tle-sgp4 --mode operational --algorithm int-mc --int-mc-sampling-rate 0.25 --int-mc-rank 5 --int-mc-window 12
+npm run int:experiment -- --tasks examples/datasets/radar-calibrated-starlink-main-8x8-48-traffic.csv --out stage2-int/runs/int-mc-main-8x8-smoke --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json --mode operational --algorithm int-mc --int-mc-sampling-rate 0.25 --int-mc-rank 5 --int-mc-window 12
 ```
 
 关键产物：
@@ -370,6 +375,18 @@ npm run verify:stage1
 - 检查卫星网络真值模型是否可以正常生成；
 - 检查节点、链路、业务、导出字段是否满足当前阶段要求。
 
+### 7.1.1 Starlink 保真补强验收
+
+```bash
+npm run verify:stage1:starlink
+```
+
+用途：
+
+- 检查默认轻量星座是否采用 Starlink 主壳层近似高度/倾角；
+- 检查 CelesTrak Starlink 主壳层 `8x8`、主壳层 `47x14` 和最大规模对照 `72x22` 真实 TLE 快照是否可用；
+- 实际导出 real-tle-sgp4 的三类小时间片真值，证明第一阶段既能对齐 `53°/550 km` 主壳层，也能运行更大规模真实公开快照。
+
 ### 7.2 总体验收
 
 ```bash
@@ -383,10 +400,12 @@ npm run verify:goal
 - 检查 Ground OAM 重构；
 - 检查关键产物是否存在。
 
+当前默认输入为 Starlink 主壳层 `8x8` 真实 TLE 快照和 Radar 校准业务数据集。调试时可以追加 `--slices <N>` 缩短实验时间片；正式结论建议使用完整 48 时间片。
+
 ### 7.3 校验业务数据集
 
 ```bash
-npm run validate:dataset -- --tasks examples/datasets/radar-calibrated-starlink-8x8-48-traffic.csv --tle-snapshot data/tle-snapshots/celestrak-starlink-real-walker-8x8.json
+npm run validate:dataset -- --tasks examples/datasets/radar-calibrated-starlink-main-8x8-48-traffic.csv --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json
 ```
 
 用途：
@@ -399,7 +418,7 @@ npm run validate:dataset -- --tasks examples/datasets/radar-calibrated-starlink-
 ### 7.4 导出第一阶段真值场景
 
 ```bash
-npm run export:scenario -- --tasks examples/datasets/radar-calibrated-starlink-8x8-48-traffic.csv --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-real-walker-8x8.json --mode operational --out exports/radar-calibrated-starlink-8x8-48
+npm run export:scenario -- --tasks examples/datasets/radar-calibrated-starlink-main-8x8-48-traffic.csv --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json --mode operational --out exports/radar-calibrated-starlink-main-8x8-48
 ```
 
 输出通常包括：
@@ -416,7 +435,7 @@ manifest.json
 ### 7.5 运行 INT 实验
 
 ```bash
-npm run int:experiment -- --tasks examples/datasets/radar-calibrated-starlink-8x8-48-traffic.csv --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-real-walker-8x8.json --mode operational --algorithm path-balance --out stage2-int/runs/radar-calibrated-8x8
+npm run int:experiment -- --tasks examples/datasets/radar-calibrated-starlink-main-8x8-48-traffic.csv --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json --mode operational --algorithm path-balance --out stage2-int/runs/radar-calibrated-main-8x8
 ```
 
 输出通常包括：
@@ -438,10 +457,16 @@ int-process-visualization.json
 npm run tle:fetch
 ```
 
+生成 Starlink `53°/550 km` 主壳层快照时建议显式指定目标壳层：
+
+```bash
+npm run tle:fetch -- --planes 47 --satellites-per-plane 14 --target-inclination 53 --target-altitude 550 --out data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-47x14.json
+```
+
 校验快照：
 
 ```bash
-npm run tle:verify -- --snapshot data/tle-snapshots/celestrak-starlink-real-walker-8x8.json
+npm run tle:verify -- --snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json
 ```
 
 ### 7.7 生成业务数据集
@@ -456,6 +481,25 @@ npm run generate:real-traffic
 
 ```bash
 npm run generate:radar-traffic
+```
+
+### 7.8 生成第一阶段真实化数据集
+
+```bash
+npm run dataset:stage1:realistic
+```
+
+默认行为：
+
+- 使用 `celestrak-starlink-main-550km-53deg-walker-47x14.json` 作为真实公开 TLE-SGP4 快照；
+- 使用 `traffic-calibration/cloudflare-radar-profile.json` 生成公开统计特征校准业务；
+- 导出 `nodes.csv`、`links.csv`、`routes.csv`、`metrics.csv` 和数据集 manifest；
+- 输出目录默认为 `exports/stage1-realistic-main-47x14-48/`。
+
+快速烟测可以使用更小的 8x8 快照：
+
+```bash
+npm run dataset:stage1:realistic -- --snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json --slices 4 --out exports/stage1-realistic-smoke-main-8x8-4
 ```
 
 ## 8. 仪表盘功能
@@ -565,7 +609,7 @@ stage2-int/predicted-contact-plan-evaluation.json
 一次标准命令示例：
 
 ```powershell
-npm run int:experiment -- --tasks examples/datasets/stage1-standard-traffic.csv --out stage2-int/runs/int-mc-contact-plan-smoke --orbit tle-sgp4 --mode operational --algorithm int-mc
+npm run int:experiment -- --tasks examples/datasets/radar-calibrated-starlink-main-8x8-48-traffic.csv --out stage2-int/runs/int-mc-contact-plan-main-8x8-smoke --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json --mode operational --algorithm int-mc
 ```
 
 在最新 smoke run 中，48 个时间片下生成 5760 个链路样本，预测 contact plan 的 precision/recall/accuracy 均为 1，INT-MC 对 4971 个 active 链路样本完成 100% active-link completion，其中 3862 个来自直接 INT 观测，1109 个由矩阵补全推断得到。

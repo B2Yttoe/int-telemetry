@@ -13,6 +13,7 @@
     "audit:dashboard": "node scripts/auditDashboard.mjs",
     "assess:stage1": "node scripts/assessStageOneModel.mjs",
     "verify:stage1": "node scripts/verifyStageOne.mjs",
+    "verify:stage1:starlink": "node scripts/verifyStageOneStarlinkFidelity.mjs",
     "baseline:stage1": "node scripts/exportStageOneBaseline.mjs",
     "matrix:stage1": "node scripts/exportStageOneScenarioMatrix.mjs",
     "trace:stage1": "node scripts/exportStageOneBusinessTrace.mjs",
@@ -23,10 +24,12 @@
     "tle:verify": "node scripts/verifyRealTleSnapshot.mjs",
     "int:experiment": "node stage2-int/tools/run-int-experiment.mjs",
     "int:verify": "node stage2-int/tools/verify-int-experiment.mjs",
+    "int:align": "node stage2-int/tools/audit-int-mc-alignment.mjs",
     "verify:goal": "node scripts/verifyEndToEndGoal.mjs",
     "validate:dataset": "node scripts/validateDataset.mjs",
     "generate:real-traffic": "node scripts/generateRealSnapshotTraffic.mjs",
     "generate:radar-traffic": "node scripts/generateRadarCalibratedTraffic.mjs",
+    "dataset:stage1:realistic": "node scripts/exportStageOneRealisticDataset.mjs",
     "report:stage1": "node scripts/auditStageOne.mjs --report-dir reports/stage1"
   },
   "dependencies": {

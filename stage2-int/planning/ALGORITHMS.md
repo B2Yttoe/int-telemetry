@@ -194,7 +194,7 @@ LEO 动态拓扑下的关键改动：
 运行方式：
 
 ```powershell
-npm run int:experiment -- --tasks examples/datasets/stage1-standard-traffic.csv --out stage2-int/runs/int-mc-smoke --orbit tle-sgp4 --mode operational --algorithm int-mc --int-mc-sampling-rate 0.25 --int-mc-rank 5
+npm run int:experiment -- --tasks examples/datasets/radar-calibrated-starlink-main-8x8-48-traffic.csv --out stage2-int/runs/int-mc-main-8x8-smoke --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json --mode operational --algorithm int-mc --int-mc-sampling-rate 0.25 --int-mc-rank 5
 ```
 
 主要输出：

@@ -95,17 +95,22 @@ function markdownTable(checks) {
 }
 
 const args = process.argv.slice(2);
-const tasks = resolve(argValue(args, "--tasks", "examples/datasets/stage1-standard-traffic.csv"));
-const orbit = argValue(args, "--orbit", "tle-sgp4");
+const tasks = resolve(argValue(args, "--tasks", "examples/datasets/radar-calibrated-starlink-main-8x8-48-traffic.csv"));
+const orbit = argValue(args, "--orbit", "real-tle-sgp4");
 const mode = argValue(args, "--mode", "operational");
 const algorithm = argValue(args, "--algorithm", "path-balance");
 const routing = argValue(args, "--routing", "shortest-path");
+const slices = argValue(args, "--slices", "");
+const tleSnapshot = resolve(
+  argValue(args, "--tle-snapshot", "data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json"),
+);
 const reportDir = resolve(argValue(args, "--report-dir", "reports/goal"));
 const out = resolve(argValue(args, "--out", `stage2-int/runs/goal-e2e-${nowStamp()}`));
 const skipStage1 = hasArg(args, "--skip-stage1");
 const skipBuild = hasArg(args, "--skip-build");
 
 if (!existsSync(tasks)) throw new Error(`Task dataset not found: ${tasks}`);
+if (orbit === "real-tle-sgp4" && !existsSync(tleSnapshot)) throw new Error(`TLE snapshot not found: ${tleSnapshot}`);
 
 await mkdir(reportDir, { recursive: true });
 
@@ -121,23 +126,27 @@ if (!skipStage1) {
   stage1Verification = parseLastJson(stage1Result.stdout, "stage1 verification");
 }
 
+const experimentArgs = [
+  "stage2-int/tools/run-int-experiment.mjs",
+  "--tasks",
+  tasks,
+  "--out",
+  out,
+  "--orbit",
+  orbit,
+  "--mode",
+  mode,
+  "--routing",
+  routing,
+  "--algorithm",
+  algorithm,
+];
+if (orbit === "real-tle-sgp4") experimentArgs.push("--tle-snapshot", tleSnapshot);
+if (slices) experimentArgs.push("--slices", slices);
+
 const experimentResult = await runCommand(
   process.execPath,
-  [
-    "stage2-int/tools/run-int-experiment.mjs",
-    "--tasks",
-    tasks,
-    "--out",
-    out,
-    "--orbit",
-    orbit,
-    "--mode",
-    mode,
-    "--routing",
-    routing,
-    "--algorithm",
-    algorithm,
-  ],
+  experimentArgs,
   "INT end-to-end experiment",
 );
 commands.push({

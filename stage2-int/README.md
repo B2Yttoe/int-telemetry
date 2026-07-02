@@ -342,16 +342,18 @@ pass = true
 示例：
 
 ```bash
-npm run int:experiment -- --tasks examples/datasets/stage1-standard-traffic.csv --out stage2-int/runs/standard-traffic-smoke --orbit tle-sgp4 --mode operational --algorithm path-balance
+npm run int:experiment -- --tasks examples/datasets/radar-calibrated-starlink-main-8x8-48-traffic.csv --out stage2-int/runs/main-8x8-path-balance-smoke --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json --mode operational --algorithm path-balance
 ```
 
 实验结束后建议立刻运行验收：
 
 ```bash
-npm run int:verify -- --run stage2-int/runs/standard-traffic-smoke
+npm run int:verify -- --run stage2-int/runs/main-8x8-path-balance-smoke
 ```
 
 当前 `int:experiment` 会默认自动运行同一套验收，写出验收报告，并把验收摘要写回 `int-experiment-manifest.json` 的 `verification` 字段；`int:verify` 主要用于之后复验已有 run，或在手工替换某些输出文件后重新检查。调试中如果只想生成实验文件、暂时不跑验收，可以追加 `--skip-verify`。
+
+调试时可以追加 `--slices <N>` 缩短第一阶段真值导出的时间片数量。短时间片烟测适合检查管线是否连通，但如果业务数据集本身覆盖 48 个时间片，被截断的任务会在输入校验报告中体现为 warnings；正式覆盖率和准确率结论应使用完整时间片实验。
 
 如果需要一次性验收整个研究目标，可以运行：
 
@@ -359,7 +361,7 @@ npm run int:verify -- --run stage2-int/runs/standard-traffic-smoke
 npm run verify:goal
 ```
 
-该命令会顺序执行第一阶段验收、标准外部业务数据集 INT 端到端实验、INT 复验和前端构建，并在 `reports/goal/` 下生成 `goal-e2e-verification.json` 与 `goal-e2e-verification.md`。它会检查第一阶段仿真底座是否通过、输入业务数据集是否校验通过、INT 是否只基于已下传报告重构、probe-int 是否达到逐时间片全网节点/链路 100% 覆盖、最终交付清单和准确率报告是否存在并互相指向。
+该命令会顺序执行第一阶段验收、Starlink 主壳层 `8x8` Radar 校准业务 INT 端到端实验、INT 复验和前端构建，并在 `reports/goal/` 下生成 `goal-e2e-verification.json` 与 `goal-e2e-verification.md`。它会检查第一阶段仿真底座是否通过、输入业务数据集是否校验通过、INT 是否只基于已下传报告重构、probe-int 是否达到逐时间片全网节点/链路 100% 覆盖、最终交付清单和准确率报告是否存在并互相指向。
 
 完整复现实验步骤、输出解释和收尾归档建议见根目录 [EXPERIMENT_REPRODUCTION_GUIDE.md](../EXPERIMENT_REPRODUCTION_GUIDE.md)。
 

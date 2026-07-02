@@ -17,6 +17,7 @@ import {
   Unlock,
 } from "lucide-react";
 import { walkerNetworkConfig } from "./config/walkerNetworkConfig";
+import realStarlinkMainShell8x8Snapshot from "../data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json";
 import OrbitalScene from "./components/OrbitalScene";
 import PlanarTopology from "./components/PlanarTopology";
 import TelemetrySimulationPage from "./components/TelemetrySimulationPage";
@@ -43,6 +44,7 @@ import type {
   NodeMode,
   NodeType,
   OrbitModel,
+  RealTleCatalogSnapshot,
   RoutedTaskPath,
   RoutingAlgorithm,
   SimulationMode,
@@ -1165,9 +1167,19 @@ export default function App() {
   const [tasks, setTasks] = useState<TaskTrafficRecord[]>([]);
   const [datasetName, setDatasetName] = useState("场景：正常业务");
   const [datasetMessage, setDatasetMessage] = useState("使用内置确定性业务模板");
+  const tleCatalogSnapshot =
+    orbitModel === "real-tle-sgp4" ? (realStarlinkMainShell8x8Snapshot as RealTleCatalogSnapshot) : undefined;
   const slices = useMemo(
-    () => generateWalkerNetwork(walkerNetworkConfig, { mode: simulationMode, tasks, trafficProfile, orbitModel, routingAlgorithm }),
-    [simulationMode, tasks, trafficProfile, orbitModel, routingAlgorithm],
+    () =>
+      generateWalkerNetwork(walkerNetworkConfig, {
+        mode: simulationMode,
+        tasks,
+        trafficProfile,
+        orbitModel,
+        routingAlgorithm,
+        tleCatalogSnapshot,
+      }),
+    [simulationMode, tasks, trafficProfile, orbitModel, routingAlgorithm, tleCatalogSnapshot],
   );
   const [snapshotIndex, setSnapshotIndex] = useState<number | null>(null);
   const [motionSliceIndex, setMotionSliceIndex] = useState(0);
@@ -1461,6 +1473,13 @@ export default function App() {
                 onClick={() => setOrbitModel("tle-sgp4")}
               >
                 TLE + SGP4
+              </button>
+              <button
+                type="button"
+                className={orbitModel === "real-tle-sgp4" ? "active" : ""}
+                onClick={() => setOrbitModel("real-tle-sgp4")}
+              >
+                真实 TLE + SGP4
               </button>
             </div>
             <label className="dataset-upload">

@@ -17,9 +17,9 @@
     "status_estimate": { "type": ["string", "null"] },
     "utilization_percent_estimate": { "type": ["number", "null"] },
     "latency_ms_estimate": { "type": ["number", "null"] },
+    "queue_latency_ms_estimate": { "type": ["number", "null"] },
     "capacity_mbps_estimate": { "type": ["number", "null"] },
     "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
   },
   "additionalProperties": true
 }
-

@@ -8,8 +8,8 @@ function argValue(args, name, fallback = "") {
 }
 
 const args = process.argv.slice(2);
-const snapshotPath = resolve(argValue(args, "--snapshot", "data/tle-snapshots/celestrak-starlink-real-walker-72x22.json"));
-const outPath = resolve(argValue(args, "--out", "examples/datasets/real-starlink-72x22-ml-48-traffic.csv"));
+const snapshotPath = resolve(argValue(args, "--snapshot", "data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-47x14.json"));
+const outPath = resolve(argValue(args, "--out", "examples/datasets/real-starlink-main-47x14-ml-48-traffic.csv"));
 const slices = Number(argValue(args, "--slices", "48"));
 const snapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
 const planes = snapshot.layout.planes;

@@ -33,6 +33,53 @@ overhead_ratio = int_metadata_bytes / carried_business_bytes
 duplicate_link_collection_count
 ```
 
+建议后续论文实验将 INT 开销拆成以下几类，而不是只用单一 `overhead_ratio`：
+
+```text
+probe_packet_count = generated_probe_packets
+probe_hop_count = sum(probe_path_hops)
+metadata_bytes = sum(hop_records * bytes_per_hop_metadata)
+report_bytes = sum(report_size_bytes)
+control_bytes = probe_packet_bytes + metadata_bytes + report_bytes
+business_bytes = sum(carried_business_mbps * slice_seconds / 8)
+bandwidth_overhead_ratio = control_bytes / max(business_bytes, 1)
+link_overhead_ratio = per_link_int_bytes / max(per_link_business_bytes, 1)
+node_processing_overhead = int_hop_records_per_node * per_record_processing_cost
+node_telemetry_energy = per_node_processing_energy + per_node_tx_energy
+sgl_downlink_report_bytes = bytes sent by the final satellite toward Ground OAM
+telemetry_storage_overhead = generated_reports_bytes + queued_reports_bytes
+```
+
+其中：
+
+- `bandwidth_overhead_ratio`：最核心，表示 INT probe、metadata 和 report 占业务承载量的比例。
+- `probe_hop_count`：反映 INT 在星间链路上实际穿越了多少跳，比单纯 probe 数量更能代表网络负担。
+- `report_bytes`：反映 Ground OAM 回传压力，尤其适合评估星地回传窗口受限时的开销。
+- `duplicate_link_collection_count`：同一时间片同一链路被重复测量的次数，越高说明采样路径冗余越大。
+- `node_telemetry_energy`：反映每颗卫星为了遥测额外消耗的处理和发送能量，适合分析低电量、阴影区和节能模式下的遥测调度是否合理。
+- `sgl_downlink_report_bytes`：反映最终星地回传压力，适合和地面站窗口、report 优先级、遥测缓存联合分析。
+- `telemetry_storage_overhead`：反映卫星缓存压力，适合和 `telemetry_buffer_mb`、`telemetry_dropped_mb` 联合分析。
+- `business_impact`：建议用业务端到端时延、队列和丢弃变化刻画，而不是只看 INT 自身字节数。
+
+建议至少做三组对比：
+
+```text
+no-int baseline
+traffic-int
+probe-int / int-mc
+```
+
+业务影响指标建议为：
+
+```text
+delta_task_latency_ms = latency_with_int - latency_without_int
+delta_queue_mb = queue_with_int - queue_without_int
+delta_drop_mb = drop_with_int - drop_without_int
+delta_delivery_ratio = delivery_ratio_with_int - delivery_ratio_without_int
+```
+
+在当前项目抽象层级下，INT 开销不需要逐包仿真；可以按时间片汇总 probe path、hop record、report size 和业务承载字节来估算。
+
 ## 3. 时效性
 
 ```text

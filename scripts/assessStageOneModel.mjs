@@ -246,7 +246,7 @@ function buildAssessment(report, baseline, scenarioMatrix, businessTrace) {
   ];
 
   const remainingGaps = [
-    "仍使用 synthetic-walker TLE 风格轨道数据，后续应接入 CelesTrak 或 Space-Track 等公开 TLE 数据源进行校准。",
+    "默认交互模式仍是 8x8 轻量星座；若论文实验强调主壳层真实性，应使用 real-tle-sgp4 的 CelesTrak Starlink 53°/550 km 47x14 快照；若强调规模压力，应使用 72x22 对照快照。",
     "业务数据集接口已经可用，但仍需要用更贴近研究场景的流量矩阵、任务时长和地面站回传需求做外部验证。",
     "链路、能耗和节点资源参数具备可解释公式，但还需要根据目标论文、星座资料或实验假设进行参数表固化。",
     "第二阶段开始前应冻结一版配置、数据集 schema、真值导出字段和验收报告，作为 INT 观测误差的对照基线。",

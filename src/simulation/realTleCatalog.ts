@@ -157,28 +157,83 @@ function shellKey(candidate: Candidate) {
   return `${inclinationBin.toFixed(1)}deg-${altitudeBin}km`;
 }
 
-function pickShell(candidates: Candidate[], options: BuildRealTleSnapshotOptions) {
-  if (options.targetInclinationDeg !== undefined || options.targetAltitudeKm !== undefined) {
-    const targetInclination = options.targetInclinationDeg ?? average(candidates.map((candidate) => candidate.inclination));
-    const targetAltitude = options.targetAltitudeKm ?? average(candidates.map((candidate) => candidate.altitudeKm));
-    return candidates
-      .map((candidate) => ({
-        candidate,
-        distance:
-          Math.abs(candidate.inclination - targetInclination) * 100 +
-          Math.abs(candidate.altitudeKm - targetAltitude),
-      }))
-      .sort((a, b) => a.distance - b.distance)
-      .map((entry) => entry.candidate);
-  }
-
+function groupByShell(candidates: Candidate[]) {
   const bins = new Map<string, Candidate[]>();
   candidates.forEach((candidate) => {
     const key = shellKey(candidate);
     bins.set(key, [...(bins.get(key) ?? []), candidate]);
   });
+  return bins;
+}
 
-  return [...bins.values()].sort((a, b) => b.length - a.length)[0] ?? [];
+function pickShell(candidates: Candidate[], options: BuildRealTleSnapshotOptions) {
+  const bins = [...groupByShell(candidates).entries()].map(([key, shellCandidates]) => ({
+    key,
+    candidates: shellCandidates,
+    meanInclinationDeg: average(shellCandidates.map((candidate) => candidate.inclination)),
+    meanAltitudeKm: average(shellCandidates.map((candidate) => candidate.altitudeKm)),
+  }));
+
+  if (options.targetInclinationDeg !== undefined || options.targetAltitudeKm !== undefined) {
+    const targetInclination = options.targetInclinationDeg ?? average(candidates.map((candidate) => candidate.inclination));
+    const targetAltitude = options.targetAltitudeKm ?? average(candidates.map((candidate) => candidate.altitudeKm));
+    const requestedMinimumCount = Math.max(
+      1,
+      Math.floor(options.planes ?? 72) * Math.floor(options.satellitesPerPlane ?? 22),
+    );
+    return (
+      bins
+        .map((bin) => ({
+          ...bin,
+          enoughSatellites: bin.candidates.length >= requestedMinimumCount,
+          distance:
+            Math.abs(bin.meanInclinationDeg - targetInclination) * 100 +
+            Math.abs(bin.meanAltitudeKm - targetAltitude),
+        }))
+        .sort(
+          (a, b) =>
+            a.distance - b.distance ||
+            Number(b.enoughSatellites) - Number(a.enoughSatellites) ||
+            b.candidates.length - a.candidates.length,
+        )[0]?.candidates ?? []
+    );
+  }
+
+  return bins.sort((a, b) => b.candidates.length - a.candidates.length)[0]?.candidates ?? [];
+}
+
+function snapshotSelectionStrategy(options: BuildRealTleSnapshotOptions) {
+  return options.targetInclinationDeg !== undefined || options.targetAltitudeKm !== undefined
+    ? "target-shell-raan-clusters-even-slot-sampling"
+    : "largest-shell-raan-clusters-even-slot-sampling";
+}
+
+function targetSelectionSummary(options: BuildRealTleSnapshotOptions) {
+  if (options.targetInclinationDeg === undefined && options.targetAltitudeKm === undefined) return undefined;
+  return {
+    target_inclination_deg: options.targetInclinationDeg,
+    target_altitude_km: options.targetAltitudeKm,
+  };
+}
+
+function shellDistanceKmDeg(candidates: Candidate[], options: BuildRealTleSnapshotOptions) {
+  if (options.targetInclinationDeg === undefined && options.targetAltitudeKm === undefined) return undefined;
+  const targetInclination = options.targetInclinationDeg ?? average(candidates.map((candidate) => candidate.inclination));
+  const targetAltitude = options.targetAltitudeKm ?? average(candidates.map((candidate) => candidate.altitudeKm));
+  return round(
+    Math.abs(average(candidates.map((candidate) => candidate.inclination)) - targetInclination) * 100 +
+      Math.abs(average(candidates.map((candidate) => candidate.altitudeKm)) - targetAltitude),
+    2,
+  );
+}
+
+function selectedShellKey(candidates: Candidate[]) {
+  if (candidates.length === 0) return "";
+  return shellKey({
+    ...candidates[0],
+    inclination: average(candidates.map((candidate) => candidate.inclination)),
+    altitudeKm: average(candidates.map((candidate) => candidate.altitudeKm)),
+  });
 }
 
 function circularMeanDeg(values: number[]) {
@@ -305,8 +360,11 @@ export function buildRealTleSnapshotFromCelestrakJson(
     layout: {
       planes: requestedPlanes,
       satellites_per_plane: requestedSlots,
-      selection_strategy: "largest-shell-raan-clusters-even-slot-sampling",
+      selection_strategy: snapshotSelectionStrategy(options),
       raan_cluster_threshold_deg: raanThreshold,
+      ...targetSelectionSummary(options),
+      selected_shell_key: selectedShellKey(shellCandidates),
+      target_shell_distance: shellDistanceKmDeg(shellCandidates, options),
     },
     satellites,
   };

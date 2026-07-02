@@ -300,6 +300,124 @@ function buildTopologyClasses(rows, threshold) {
   };
 }
 
+function buildPredictionWindows(topology, params) {
+  const rows = [...topology.per_slice].sort((left, right) => Number(left.slice_index) - Number(right.slice_index));
+  const refreshSlices = Math.max(1, Number(params.refresh_slices) || 1);
+  const horizonSlices = Math.max(1, Number(params.prediction_horizon_slices) || rows.length || 1);
+  const windows = [];
+
+  for (let startPosition = 0; startPosition < rows.length; startPosition += refreshSlices) {
+    const windowRows = rows.slice(startPosition, startPosition + horizonSlices);
+    if (windowRows.length === 0) continue;
+    const classIds = [...new Set(windowRows.map((row) => row.topology_class_id).filter(Boolean))];
+    let classTransitions = 0;
+    for (let index = 1; index < windowRows.length; index += 1) {
+      if (windowRows[index].topology_class_id !== windowRows[index - 1].topology_class_id) classTransitions += 1;
+    }
+    const freshClassPlans = classIds.length;
+    const reusableSlices = Math.max(0, windowRows.length - freshClassPlans);
+    windows.push({
+      plan_slice_index: windowRows[0].slice_index,
+      plan_time: windowRows[0].time,
+      horizon_start_slice: windowRows[0].slice_index,
+      horizon_end_slice: windowRows[windowRows.length - 1].slice_index,
+      horizon_slices: windowRows.length,
+      configured_prediction_horizon_slices: horizonSlices,
+      refresh_slices: refreshSlices,
+      topology_class_ids: classIds.join(">"),
+      topology_class_count: classIds.length,
+      class_transitions: classTransitions,
+      fresh_class_plans: freshClassPlans,
+      reusable_slices: reusableSlices,
+      replan_slices: freshClassPlans,
+      estimated_reuse_ratio: round(reusableSlices / Math.max(windowRows.length, 1)),
+      mean_predicted_active_links: round(mean(windowRows.map((row) => numberValue(row.predicted_active_links)))),
+      min_predicted_active_links: Math.min(...windowRows.map((row) => numberValue(row.predicted_active_links))),
+      max_predicted_active_links: Math.max(...windowRows.map((row) => numberValue(row.predicted_active_links))),
+    });
+  }
+
+  return windows;
+}
+
+function buildTopologyForecastBySlice(rows, topology, params) {
+  const bySlice = groupBy(rows, (row) => String(row.slice_index));
+  const sliceRows = [...topology.per_slice].sort((left, right) => Number(left.slice_index) - Number(right.slice_index));
+  const activeBySlice = new Map(
+    sliceRows.map((slice) => [
+      String(slice.slice_index),
+      new Set((bySlice.get(String(slice.slice_index)) ?? [])
+        .filter((row) => boolValue(row.predicted_active))
+        .map((row) => row.link_id)),
+    ]),
+  );
+  const horizonSlices = Math.max(1, Number(params.prediction_horizon_slices) || sliceRows.length || 1);
+  const similarityThreshold = clamp(1 - Number(params.topology_class_threshold || 0.08), 0.7, 0.99);
+  const majorDriftThreshold = Math.max(0.72, similarityThreshold - 0.06);
+
+  return sliceRows.map((slice, position) => {
+    const currentSet = activeBySlice.get(String(slice.slice_index)) ?? new Set();
+    const futureRows = sliceRows.slice(position, position + horizonSlices);
+    const similarities = futureRows.map((future) =>
+      jaccard(currentSet, activeBySlice.get(String(future.slice_index)) ?? new Set()),
+    );
+    const futureOnly = futureRows.slice(1);
+    const futureSimilarities = similarities.slice(1);
+    let stableWindow = 0;
+    for (const value of similarities) {
+      if (value >= similarityThreshold) stableWindow += 1;
+      else break;
+    }
+    const nextClassTransition = futureOnly.find((future) => future.topology_class_id !== slice.topology_class_id);
+    const nextMajorDrift = futureRows.find((future, index) => index > 0 && similarities[index] < majorDriftThreshold);
+    const minSimilarity = similarities.length ? Math.min(...similarities) : 1;
+    const meanSimilarity = mean(similarities);
+    const classTransitionCount = futureOnly.filter((future, index) =>
+      future.topology_class_id !== futureRows[index].topology_class_id,
+    ).length;
+    const driftPressure = clamp(
+      (1 - meanSimilarity) * 0.45 +
+        (1 - minSimilarity) * 0.35 +
+        classTransitionCount / Math.max(futureOnly.length, 1) * 0.2,
+      0,
+      1,
+    );
+    const reuseConfidence = clamp(
+      (stableWindow / Math.max(futureRows.length, 1)) * 0.45 +
+        meanSimilarity * 0.4 +
+        (1 - driftPressure) * 0.15,
+      0,
+      1,
+    );
+    const hasFutureEvidence = futureOnly.length > 0;
+    const recommendedMode = driftPressure >= 0.35 || (hasFutureEvidence && stableWindow <= 1)
+      ? "preemptive-replan"
+      : reuseConfidence >= 0.82
+        ? "reuse-probe-plan"
+        : "reuse-with-local-repair";
+
+    return {
+      slice_index: slice.slice_index,
+      topology_forecast_horizon_slices: futureRows.length,
+      topology_forecast_stable_window_slices: stableWindow,
+      topology_forecast_next_class_transition_in_slices: nextClassTransition
+        ? Number(nextClassTransition.slice_index) - Number(slice.slice_index)
+        : "",
+      topology_forecast_next_major_drift_in_slices: nextMajorDrift
+        ? Number(nextMajorDrift.slice_index) - Number(slice.slice_index)
+        : "",
+      topology_forecast_mean_active_jaccard: round(meanSimilarity, 5),
+      topology_forecast_min_active_jaccard: round(minSimilarity, 5),
+      topology_forecast_class_transition_count: classTransitionCount,
+      topology_forecast_drift_pressure: round(driftPressure, 5),
+      topology_forecast_reuse_confidence: round(reuseConfidence, 5),
+      topology_forecast_recommended_plan_mode: recommendedMode,
+      topology_forecast_class_sequence: futureRows.map((row) => row.topology_class_id).join(">"),
+      topology_forecast_policy: "rolling-active-set-jaccard-and-class-transition",
+    };
+  });
+}
+
 function evaluatePrediction(rows) {
   let tp = 0;
   let tn = 0;
@@ -387,6 +505,14 @@ const predictionRows = links.map((link) => {
 });
 
 const topology = buildTopologyClasses(predictionRows, params.topology_class_threshold);
+const topologyForecastRows = buildTopologyForecastBySlice(predictionRows, topology, params);
+const topologyForecastBySlice = new Map(topologyForecastRows.map((row) => [String(row.slice_index), row]));
+const topologyPerSlice = topology.per_slice.map((row) => ({
+  ...row,
+  ...(topologyForecastBySlice.get(String(row.slice_index)) ?? {}),
+}));
+topology.per_slice = topologyPerSlice;
+const predictionWindows = buildPredictionWindows(topology, params);
 const evaluation = evaluatePrediction(predictionRows);
 const contactPlan = {
   schema_version: "stage2-predicted-contact-plan-v1",
@@ -420,6 +546,14 @@ const contactPlan = {
   engineering_parameters: params,
   topology_classes: topology.classes,
   per_slice: topology.per_slice,
+  topology_forecast: {
+    policy: "rolling-active-set-jaccard-and-class-transition",
+    mean_stable_window_slices: round(mean(topologyForecastRows.map((row) => numberValue(row.topology_forecast_stable_window_slices)))),
+    mean_drift_pressure: round(mean(topologyForecastRows.map((row) => numberValue(row.topology_forecast_drift_pressure)))),
+    preemptive_replan_slices: topologyForecastRows.filter((row) => row.topology_forecast_recommended_plan_mode === "preemptive-replan").length,
+    reuse_recommended_slices: topologyForecastRows.filter((row) => row.topology_forecast_recommended_plan_mode === "reuse-probe-plan").length,
+  },
+  prediction_windows: predictionWindows,
   evaluation,
   entries: predictionRows,
 };
@@ -429,6 +563,8 @@ await Promise.all([
   writeFile(join(outputDir, "predicted-contact-plan.json"), JSON.stringify(contactPlan, null, 2), "utf8"),
   writeFile(join(outputDir, "predicted-contact-plan.csv"), rowsToCsv(predictionRows), "utf8"),
   writeFile(join(outputDir, "predicted-contact-plan-summary.csv"), rowsToCsv(topology.per_slice), "utf8"),
+  writeFile(join(outputDir, "predicted-topology-forecast.csv"), rowsToCsv(topologyForecastRows), "utf8"),
+  writeFile(join(outputDir, "predicted-contact-plan-windows.csv"), rowsToCsv(predictionWindows), "utf8"),
   writeFile(join(outputDir, "predicted-contact-plan-evaluation.json"), JSON.stringify(evaluation, null, 2), "utf8"),
 ]);
 
@@ -438,6 +574,8 @@ console.log(JSON.stringify({
   predictionHorizonSlices: params.prediction_horizon_slices,
   refreshSlices: params.refresh_slices,
   completionWindowSlices: params.completion_window_slices,
+  predictionWindows: predictionWindows.length,
+  topologyForecast: contactPlan.topology_forecast,
   stepMinutes: params.step_minutes,
   topologyClasses: topology.classes.length,
   precision: evaluation.precision,
@@ -445,4 +583,3 @@ console.log(JSON.stringify({
   accuracy: evaluation.accuracy,
   meanSliceJaccard: evaluation.mean_slice_jaccard,
 }, null, 2));
-

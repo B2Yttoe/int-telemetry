@@ -76,37 +76,37 @@ npm run int:experiment -- --tasks examples/datasets/stage1-ml-48-traffic.csv --o
 
 ## 真实快照 48 时间片业务数据集
 
-`real-starlink-72x22-ml-48-traffic.csv` 和 `real-starlink-8x8-ml-48-traffic.csv` 面向 `real-tle-sgp4` 模式生成。它们沿用 48 时间片的长时业务、周期业务、突发业务和本地计算任务结构，但节点编号会按照真实快照的 `planes x satellites_per_plane` 自动展开，因此不会把 8x8 的节点误投到 72x22 场景，或者把 72x22 节点误投到 8x8 调试场景。
+`real-starlink-main-47x14-ml-48-traffic.csv` 和 `real-starlink-main-8x8-ml-48-traffic.csv` 面向 `real-tle-sgp4` 主壳层模式生成。它们沿用 48 时间片的长时业务、周期业务、突发业务和本地计算任务结构，但节点编号会按照真实快照的 `planes x satellites_per_plane` 自动展开，因此不会把 8x8 的节点误投到 47x14 场景，或者把 47x14 节点误投到 8x8 调试场景。
 
 生成命令：
 
 ```bash
-npm run generate:real-traffic -- --snapshot data/tle-snapshots/celestrak-starlink-real-walker-72x22.json --out examples/datasets/real-starlink-72x22-ml-48-traffic.csv --slices 48
-npm run generate:real-traffic -- --snapshot data/tle-snapshots/celestrak-starlink-real-walker-8x8.json --out examples/datasets/real-starlink-8x8-ml-48-traffic.csv --slices 48
+npm run generate:real-traffic -- --snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-47x14.json --out examples/datasets/real-starlink-main-47x14-ml-48-traffic.csv --slices 48
+npm run generate:real-traffic -- --snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json --out examples/datasets/real-starlink-main-8x8-ml-48-traffic.csv --slices 48
 ```
 
 校验命令必须带上对应快照，这样脚本会按快照中的真实平面数和槽位数校验节点编号：
 
 ```bash
-npm run validate:dataset -- --tasks examples/datasets/real-starlink-72x22-ml-48-traffic.csv --tle-snapshot data/tle-snapshots/celestrak-starlink-real-walker-72x22.json
-npm run validate:dataset -- --tasks examples/datasets/real-starlink-8x8-ml-48-traffic.csv --tle-snapshot data/tle-snapshots/celestrak-starlink-real-walker-8x8.json
+npm run validate:dataset -- --tasks examples/datasets/real-starlink-main-47x14-ml-48-traffic.csv --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-47x14.json
+npm run validate:dataset -- --tasks examples/datasets/real-starlink-main-8x8-ml-48-traffic.csv --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json
 ```
 
-当前两份数据集均包含 174 条任务，其中 138 条为跨星路由任务、36 条为本地计算任务，校验结果为 `Warnings: 0`、`Errors: 0`。72x22 真实快照导出命令：
+当前两份主壳层数据集均包含 174 条任务，其中 138 条为跨星路由任务、36 条为本地计算任务，校验结果为 `Warnings: 0`、`Errors: 0`。47x14 主壳层真实快照导出命令：
 
 ```bash
-npm run export:scenario -- --tasks examples/datasets/real-starlink-72x22-ml-48-traffic.csv --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-real-walker-72x22.json --mode operational --out exports/real-tle-starlink-72x22-ml-48
+npm run export:scenario -- --tasks examples/datasets/real-starlink-main-47x14-ml-48-traffic.csv --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-47x14.json --mode operational --out exports/real-tle-starlink-main-47x14-ml-48
 ```
 
 8x8 真实快照 INT 烟测命令：
 
 ```bash
-npm run int:experiment -- --tasks examples/datasets/real-starlink-8x8-ml-48-traffic.csv --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-real-walker-8x8.json --mode operational --algorithm path-balance --out stage2-int/runs/real-tle-8x8-traffic-global-oam --skip-verify
+npm run int:experiment -- --tasks examples/datasets/real-starlink-main-8x8-ml-48-traffic.csv --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json --mode operational --algorithm path-balance --out stage2-int/runs/real-tle-main-8x8-traffic-global-oam --skip-verify
 ```
 
 ## Cloudflare Radar 校准业务数据集
 
-`radar-calibrated-starlink-72x22-48-traffic.csv` 和 `radar-calibrated-starlink-8x8-48-traffic.csv` 是为了提升业务输入真实性新增的数据集。它们不是 Cloudflare Radar 原始日志，也不是 Starlink 真实运营流量，而是参考 Cloudflare Radar 公开互联网流量维度构造的校准合成业务，包含：
+`radar-calibrated-starlink-main-47x14-48-traffic.csv` 和 `radar-calibrated-starlink-main-8x8-48-traffic.csv` 是为了提升业务输入真实性新增的数据集。它们不是 Cloudflare Radar 原始日志，也不是 Starlink 真实运营流量，而是参考 Cloudflare Radar 公开互联网流量维度构造的校准合成业务，包含：
 
 - 按 48 时间片变化的互联网流量强度曲线；
 - 北美、欧洲、东亚、南美、大洋洲等区域需求权重；
@@ -117,22 +117,22 @@ npm run int:experiment -- --tasks examples/datasets/real-starlink-8x8-ml-48-traf
 生成命令：
 
 ```bash
-npm run generate:radar-traffic -- --snapshot data/tle-snapshots/celestrak-starlink-real-walker-72x22.json --profile traffic-calibration/cloudflare-radar-profile.json --out examples/datasets/radar-calibrated-starlink-72x22-48-traffic.csv --slices 48
-npm run generate:radar-traffic -- --snapshot data/tle-snapshots/celestrak-starlink-real-walker-8x8.json --profile traffic-calibration/cloudflare-radar-profile.json --out examples/datasets/radar-calibrated-starlink-8x8-48-traffic.csv --slices 48
+npm run generate:radar-traffic -- --snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-47x14.json --profile traffic-calibration/cloudflare-radar-profile.json --out examples/datasets/radar-calibrated-starlink-main-47x14-48-traffic.csv --slices 48
+npm run generate:radar-traffic -- --snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json --profile traffic-calibration/cloudflare-radar-profile.json --out examples/datasets/radar-calibrated-starlink-main-8x8-48-traffic.csv --slices 48
 ```
 
 校验命令：
 
 ```bash
-npm run validate:dataset -- --tasks examples/datasets/radar-calibrated-starlink-72x22-48-traffic.csv --tle-snapshot data/tle-snapshots/celestrak-starlink-real-walker-72x22.json
-npm run validate:dataset -- --tasks examples/datasets/radar-calibrated-starlink-8x8-48-traffic.csv --tle-snapshot data/tle-snapshots/celestrak-starlink-real-walker-8x8.json
+npm run validate:dataset -- --tasks examples/datasets/radar-calibrated-starlink-main-47x14-48-traffic.csv --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-47x14.json
+npm run validate:dataset -- --tasks examples/datasets/radar-calibrated-starlink-main-8x8-48-traffic.csv --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json
 ```
 
 当前生成结果：
 
 ```text
-72x22 fingerprint: d6d36270
-8x8 fingerprint: 2ccc391f
+main-47x14 fingerprint: 4e76d3b4
+main-8x8 fingerprint: 2ccc391f
 tasks: 755
 routed_tasks: 683
 local_tasks: 72

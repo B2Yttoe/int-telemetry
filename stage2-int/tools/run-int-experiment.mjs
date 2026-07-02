@@ -268,8 +268,13 @@ async function buildProcessVisualization(manifest) {
       observed_link_active: boolValue(row.observed_link_active),
       observed_link_utilization_percent: numberValue(row.observed_link_utilization_percent),
       observed_link_latency_ms: numberValue(row.observed_link_latency_ms),
+      observed_link_queue_latency_ms: numberValue(row.observed_link_queue_latency_ms),
+      observed_link_propagation_latency_ms: numberValue(row.observed_link_propagation_latency_ms),
       observed_link_capacity_mbps: numberValue(row.observed_link_capacity_mbps),
       observed_link_congestion_percent: numberValue(row.observed_link_congestion_percent),
+      observed_link_queued_mb: numberValue(row.observed_link_queued_mb),
+      observed_link_dropped_mb: numberValue(row.observed_link_dropped_mb),
+      observed_link_packet_error_rate: numberValue(row.observed_link_packet_error_rate),
       carried_traffic_mbps: numberValue(row.carried_traffic_mbps),
       demand_traffic_mbps: numberValue(row.demand_traffic_mbps),
     }));
@@ -311,6 +316,7 @@ async function buildProcessVisualization(manifest) {
         plane: numberValue(truth?.plane, fallback.plane),
         slot: numberValue(truth?.slot, fallback.slot),
         observed: boolValue(row.observed) === true,
+        observation_source: row.observation_source,
         last_observed_slice: row.last_observed_slice,
         mode_estimate: row.mode_estimate,
         cpu_percent_estimate: numberValue(row.cpu_percent_estimate),
@@ -330,13 +336,18 @@ async function buildProcessVisualization(manifest) {
         target: catalog.target ?? "",
         kind: catalog.kind ?? "",
         observed: boolValue(row.observed) === true,
+        observation_source: row.observation_source,
         last_observed_slice: row.last_observed_slice,
         status_estimate: row.status_estimate,
         active_estimate: boolValue(row.active_estimate),
         utilization_percent_estimate: numberValue(row.utilization_percent_estimate),
         latency_ms_estimate: numberValue(row.latency_ms_estimate),
+        queue_latency_ms_estimate: numberValue(row.queue_latency_ms_estimate),
         capacity_mbps_estimate: numberValue(row.capacity_mbps_estimate),
         congestion_percent_estimate: numberValue(row.congestion_percent_estimate),
+        queued_traffic_mb_estimate: numberValue(row.queued_traffic_mb_estimate),
+        dropped_traffic_mb_estimate: numberValue(row.dropped_traffic_mb_estimate),
+        packet_error_rate_estimate: numberValue(row.packet_error_rate_estimate),
         confidence: numberValue(row.confidence),
       };
     });
@@ -363,8 +374,12 @@ async function buildProcessVisualization(manifest) {
         links,
         node_observed_count: nodes.filter((node) => node.observed).length,
         link_observed_count: links.filter((link) => link.observed).length,
-        node_unknown_count: nodes.filter((node) => !node.observed).length,
-        link_unknown_count: links.filter((link) => !link.observed).length,
+        node_stale_count: nodes.filter((node) => node.observation_source === "stale-carryover").length,
+        link_stale_count: links.filter((link) => link.observation_source === "stale-carryover").length,
+        node_prior_estimate_count: nodes.filter((node) => node.observation_source === "oam-prior-estimate").length,
+        link_prior_estimate_count: links.filter((link) => link.observation_source === "oam-prior-estimate").length,
+        node_unknown_count: nodes.filter((node) => node.observation_source === "unknown").length,
+        link_unknown_count: links.filter((link) => link.observation_source === "unknown").length,
       },
       coverage: {
         truth_node_samples: numberValue(audit?.truth_node_samples, nodes.length),
@@ -552,13 +567,17 @@ function buildDeliverables(manifest, verification = null) {
     },
     primary_int_state_dataset: {
       scope: isIntMcRun
-        ? "LEO-INT-MC per-time-step link reconstruction from partial INT observations"
+        ? "LEO-INT-MC per-time-step node/link reconstruction from partial INT observations"
         : "probe-int full-network per-time-step reconstruction",
-      node_state_csv: join(probeGroundDir, "ground-reconstructed-nodes.csv"),
+      node_state_csv: isIntMcRun
+        ? manifest.outputs.int_mc_reconstructed_nodes_csv
+        : join(probeGroundDir, "ground-reconstructed-nodes.csv"),
       link_state_csv: isIntMcRun
         ? manifest.outputs.int_mc_reconstructed_links_csv
         : join(probeGroundDir, "ground-reconstructed-links.csv"),
       delivered_reports_csv: join(probeGroundDir, "ground-delivered-reports.csv"),
+      estimate_graph_json: manifest.outputs.probe_ground_oam_estimate_graph_json,
+      control_actions_csv: manifest.outputs.probe_ground_oam_control_actions_csv,
       coverage: {
         node_sample_coverage: manifest.accuracy.probe_int.node_sample_coverage,
         link_sample_coverage: manifest.accuracy.probe_int.link_sample_coverage,
@@ -578,6 +597,8 @@ function buildDeliverables(manifest, verification = null) {
       reports_csv: join(stage2Dir, "int-reports.csv"),
       reconstructed_nodes_csv: join(trafficGroundDir, "ground-reconstructed-nodes.csv"),
       reconstructed_links_csv: join(trafficGroundDir, "ground-reconstructed-links.csv"),
+      estimate_graph_json: manifest.outputs.traffic_ground_oam_estimate_graph_json,
+      control_actions_csv: manifest.outputs.traffic_ground_oam_control_actions_csv,
       coverage: manifest.accuracy.traffic_int,
     },
     probe_telemetry_sources: {
@@ -587,20 +608,47 @@ function buildDeliverables(manifest, verification = null) {
       reports_csv: join(stage2Dir, `probe-int-reports-${algorithm}.csv`),
       run_report_json: join(stage2Dir, `probe-int-run-report-${algorithm}.json`),
     },
+    overhead_datasets: {
+      scope: "common telemetry overhead datasets for native INT and INT-MC comparison",
+      traffic_overhead_by_slice_csv: manifest.outputs.traffic_overhead_by_slice_csv,
+      traffic_link_overhead_csv: manifest.outputs.traffic_link_overhead_csv,
+      traffic_node_overhead_csv: manifest.outputs.traffic_node_overhead_csv,
+      probe_overhead_by_slice_csv: manifest.outputs.probe_overhead_by_slice_csv,
+      probe_link_overhead_csv: manifest.outputs.probe_link_overhead_csv,
+      probe_node_overhead_csv: manifest.outputs.probe_node_overhead_csv,
+      comparable_metrics: [
+        "hop_records",
+        "reports",
+        "metadata_bytes",
+        "report_bytes",
+        "total_int_bytes",
+        "total_telemetry_energy_wh",
+        "total_telemetry_link_bytes",
+        "total_telemetry_energy_j per node",
+        "sgl_downlink_report_bytes per node",
+      ],
+    },
     int_mc_outputs: isIntMcRun
       ? {
+          reconstructed_nodes_csv: manifest.outputs.int_mc_reconstructed_nodes_csv,
           reconstructed_links_csv: manifest.outputs.int_mc_reconstructed_links_csv,
+          node_errors_csv: manifest.outputs.int_mc_node_errors_csv,
           link_errors_csv: manifest.outputs.int_mc_link_errors_csv,
+          node_matrix_summary_csv: manifest.outputs.int_mc_node_matrix_summary_csv,
           matrix_summary_csv: manifest.outputs.int_mc_matrix_summary_csv,
           evaluation_json: manifest.outputs.int_mc_evaluation_json,
           contact_plan_json: manifest.outputs.int_mc_contact_plan_json,
           predicted_contact_plan_json: manifest.outputs.predicted_contact_plan_json,
           predicted_contact_plan_csv: manifest.outputs.predicted_contact_plan_csv,
           predicted_contact_plan_summary_csv: manifest.outputs.predicted_contact_plan_summary_csv,
+          predicted_topology_forecast_csv: manifest.outputs.predicted_topology_forecast_csv,
+          predicted_contact_plan_windows_csv: manifest.outputs.predicted_contact_plan_windows_csv,
           predicted_contact_plan_evaluation_json: manifest.outputs.predicted_contact_plan_evaluation_json,
-          selection_report_json: join(stage2Dir, `probe-coverage-${algorithm}.json`),
+          sampling_mask_csv: manifest.outputs.int_mc_sampling_mask_csv,
+          selection_report_json: manifest.outputs.int_mc_selection_report_json,
           boundary: {
             active_mask_source: "predicted LEO contact plan",
+            planned_sampling_mask_source: "probe-sampling-mask-int-mc.csv",
             observed_mask_source: "delivered INT reports",
             topology_down_not_completed: true,
           },
@@ -871,24 +919,29 @@ function buildAccuracyReport(manifest, verification = null) {
       scope: isIntMcRun
         ? "partial probe-int observations plus LEO-INT-MC ground-side matrix completion"
         : "network-wide per-time-step state reconstructed by ground OAM from delivered probe-int reports",
-      node_state_csv: join(manifest.outputs.probe_ground_oam_dir, "ground-reconstructed-nodes.csv"),
+      node_state_csv: isIntMcRun
+        ? manifest.outputs.int_mc_reconstructed_nodes_csv
+        : join(manifest.outputs.probe_ground_oam_dir, "ground-reconstructed-nodes.csv"),
       link_state_csv: isIntMcRun
         ? manifest.outputs.int_mc_reconstructed_links_csv
         : join(manifest.outputs.probe_ground_oam_dir, "ground-reconstructed-links.csv"),
       delivered_reports_csv: join(manifest.outputs.probe_ground_oam_dir, "ground-delivered-reports.csv"),
       evaluation_json: join(manifest.outputs.probe_ground_oam_dir, "ground-oam-evaluation.json"),
+      estimate_graph_json: manifest.outputs.probe_ground_oam_estimate_graph_json,
       full_coverage_audit_json: join(manifest.outputs.probe_ground_oam_dir, "full-telemetry-coverage-audit.json"),
       metrics: probe,
       int_mc_metrics: intMc,
       int_mc_evaluation_json: manifest.outputs.int_mc_evaluation_json,
-      predicted_contact_plan_json: manifest.outputs.predicted_contact_plan_json,
-      predicted_contact_plan_evaluation_json: manifest.outputs.predicted_contact_plan_evaluation_json,
+          predicted_contact_plan_json: manifest.outputs.predicted_contact_plan_json,
+          predicted_contact_plan_windows_csv: manifest.outputs.predicted_contact_plan_windows_csv,
+          predicted_contact_plan_evaluation_json: manifest.outputs.predicted_contact_plan_evaluation_json,
       coverage_audit_summary: auditSummary,
       per_slice_coverage: Array.isArray(audit.slices) ? audit.slices : [],
     },
     traffic_int_reference: {
       scope: "business-path INT observations; intentionally partial and not expected to cover the whole network",
       evaluation_json: join(manifest.outputs.traffic_ground_oam_dir, "ground-oam-evaluation.json"),
+      estimate_graph_json: manifest.outputs.traffic_ground_oam_estimate_graph_json,
       metrics: traffic,
     },
     verification: verificationSummaryFrom(manifest, verification),
@@ -1000,6 +1053,7 @@ const orbit = argValue(args, "--orbit", "tle-sgp4");
 const mode = argValue(args, "--mode", "operational");
 const routing = argValue(args, "--routing", "shortest-path");
 const tleSnapshotPath = argValue(args, "--tle-snapshot", "");
+const timeSlices = argValue(args, "--slices", "");
 const algorithm = argValue(args, "--algorithm", "path-balance");
 const sampleRate = argValue(args, "--sample-rate", "1");
 const downlinkBudgetBytes = argValue(args, "--downlink-budget-bytes", "65536");
@@ -1008,6 +1062,22 @@ const intMcCandidateAlgorithm = argValue(args, "--int-mc-candidate-algorithm", "
 const intMcSamplingRate = argValue(args, "--int-mc-sampling-rate", "0.25");
 const intMcTargetActiveLinkSamplingRate = argValue(args, "--int-mc-target-active-link-sampling-rate", intMcSamplingRate);
 const intMcRank = argValue(args, "--int-mc-rank", "5");
+const intMcSelectionStrategy = argValue(args, "--int-mc-selection-strategy", "int-mc-leverage");
+const intMcEnergyGuardThreshold = argValue(args, "--int-mc-energy-guard-threshold", "0.45");
+const intMcEnergyBudget = argValue(args, "--int-mc-energy-budget", "true");
+const intMcEnergyBudgetMinActiveLinkSamplingRate = argValue(args, "--int-mc-energy-budget-min-active-link-sampling-rate", "0.08");
+const intMcEnergyBudgetMaxReduction = argValue(args, "--int-mc-energy-budget-max-reduction", "0.45");
+const intMcThresholdCalibrationHorizon = argValue(args, "--int-mc-threshold-calibration-horizon", "4");
+const intMcPredictionScoreHorizon = argValue(args, "--int-mc-prediction-score-horizon", intMcThresholdCalibrationHorizon);
+const intMcCostAwareSampling = argValue(args, "--int-mc-cost-aware-sampling", "true");
+const intMcCostAwarenessWeight = argValue(args, "--int-mc-cost-awareness-weight", "0.28");
+const intMcTelemetryByteBudgetPerSlice = argValue(args, "--int-mc-telemetry-byte-budget-per-slice", "0");
+const intMcOamPriorityRetest = argValue(args, "--int-mc-oam-priority-retest", "");
+const intMcOamFeedbackWeight = argValue(args, "--int-mc-oam-feedback-weight", "0.35");
+const intMcOamReplanPressureThreshold = argValue(args, "--int-mc-oam-replan-pressure-threshold", "0.68");
+const intMcOamControlActions = argValue(args, "--int-mc-oam-control-actions", "");
+const intMcOamControlWeight = argValue(args, "--int-mc-oam-control-weight", "0.22");
+const intMcOamControlReplanPressureThreshold = argValue(args, "--int-mc-oam-control-replan-pressure-threshold", "0.68");
 const intMcWindowSize = argValue(args, "--int-mc-window", "auto");
 const intMcWarmupSlices = argValue(args, "--int-mc-warmup-slices", "auto");
 const intMcPredictionHorizonSlices = argValue(args, "--int-mc-prediction-horizon-slices", "auto");
@@ -1024,6 +1094,12 @@ if (originalTasksPath && !existsSync(originalTasksPath)) {
 const originalTleSnapshotPath = tleSnapshotPath ? resolve(tleSnapshotPath) : "";
 if (originalTleSnapshotPath && !existsSync(originalTleSnapshotPath)) {
   throw new Error(`TLE snapshot not found: ${originalTleSnapshotPath}`);
+}
+if (intMcOamPriorityRetest && !existsSync(resolve(intMcOamPriorityRetest))) {
+  throw new Error(`Ground OAM priority retest file not found: ${resolve(intMcOamPriorityRetest)}`);
+}
+if (intMcOamControlActions && !existsSync(resolve(intMcOamControlActions))) {
+  throw new Error(`Ground OAM control actions file not found: ${resolve(intMcOamControlActions)}`);
 }
 
 const datasetLabel = tasksPath ? safePart(basename(tasksPath)) : `scenario-${profile}`;
@@ -1055,6 +1131,7 @@ const rawDatasetValidation = taskSnapshotPath
         await runNode("scripts/validateDataset.mjs", [
           "--tasks",
           taskSnapshotPath,
+          ...(tleSnapshotInputPath ? ["--tle-snapshot", tleSnapshotInputPath] : []),
           "--json",
         ])
       ).stdout,
@@ -1077,6 +1154,7 @@ const exportArgs = [
 ];
 if (taskSnapshotPath) exportArgs.push("--tasks", taskSnapshotPath);
 if (tleSnapshotInputPath) exportArgs.push("--tle-snapshot", tleSnapshotInputPath);
+if (timeSlices) exportArgs.push("--slices", timeSlices);
 if (includeFullJson) exportArgs.push("--full-json");
 
 const stage1Export = parseLastJson((await runNode(exportArgs[0], exportArgs.slice(1))).stdout, "stage1 export");
@@ -1155,6 +1233,46 @@ const intMcSelection = isIntMc
           intMcTargetActiveLinkSamplingRate,
           "--rank",
           intMcRank,
+          "--selection-strategy",
+          intMcSelectionStrategy,
+          "--energy-guard-threshold",
+          intMcEnergyGuardThreshold,
+          "--energy-budget",
+          intMcEnergyBudget,
+          "--energy-budget-min-active-link-sampling-rate",
+          intMcEnergyBudgetMinActiveLinkSamplingRate,
+          "--energy-budget-max-reduction",
+          intMcEnergyBudgetMaxReduction,
+          "--threshold-calibration-horizon",
+          intMcThresholdCalibrationHorizon,
+          "--prediction-score-horizon",
+          intMcPredictionScoreHorizon,
+          "--cost-aware-sampling",
+          intMcCostAwareSampling,
+          "--cost-awareness-weight",
+          intMcCostAwarenessWeight,
+          "--telemetry-byte-budget-per-slice",
+          intMcTelemetryByteBudgetPerSlice,
+          "--oam-replan-pressure-threshold",
+          intMcOamReplanPressureThreshold,
+          "--oam-control-weight",
+          intMcOamControlWeight,
+          "--oam-control-replan-pressure-threshold",
+          intMcOamControlReplanPressureThreshold,
+          ...(intMcOamPriorityRetest
+            ? [
+                "--oam-priority-retest",
+                resolve(intMcOamPriorityRetest),
+                "--oam-feedback-weight",
+                intMcOamFeedbackWeight,
+              ]
+            : []),
+          ...(intMcOamControlActions
+            ? [
+                "--oam-control-actions",
+                resolve(intMcOamControlActions),
+              ]
+            : []),
           "--window-size",
           resolvedIntMcWindowSize,
           "--warmup-slices",
@@ -1297,6 +1415,7 @@ const manifest = {
     mode,
     routing,
     algorithm,
+    slices_override: timeSlices ? Number(timeSlices) : null,
     sample_rate: Number(sampleRate),
     downlink_budget_bytes: Number(downlinkBudgetBytes),
     carry_over: carryOver !== "false",
@@ -1306,6 +1425,22 @@ const manifest = {
           sampling_rate: Number(intMcSamplingRate),
           target_active_link_sampling_rate: Number(intMcTargetActiveLinkSamplingRate),
           rank: Number(intMcRank),
+          selection_strategy: intMcSelectionStrategy,
+          energy_guard_threshold: Number(intMcEnergyGuardThreshold),
+          energy_budget_enabled: intMcEnergyBudget.toLowerCase() !== "false",
+          energy_budget_min_active_link_sampling_rate: Number(intMcEnergyBudgetMinActiveLinkSamplingRate),
+          energy_budget_max_reduction: Number(intMcEnergyBudgetMaxReduction),
+          threshold_calibration_horizon_slices: Number(intMcThresholdCalibrationHorizon),
+          prediction_score_horizon_slices: Number(intMcPredictionScoreHorizon),
+          cost_aware_sampling_enabled: intMcCostAwareSampling.toLowerCase() !== "false",
+          cost_awareness_weight: Number(intMcCostAwarenessWeight),
+          telemetry_byte_budget_per_slice: Number(intMcTelemetryByteBudgetPerSlice),
+          oam_priority_retest_path: intMcOamPriorityRetest ? resolve(intMcOamPriorityRetest) : "",
+          oam_feedback_weight: Number(intMcOamFeedbackWeight),
+          oam_replan_pressure_threshold: Number(intMcOamReplanPressureThreshold),
+          oam_control_actions_path: intMcOamControlActions ? resolve(intMcOamControlActions) : "",
+          oam_control_weight: Number(intMcOamControlWeight),
+          oam_control_replan_pressure_threshold: Number(intMcOamControlReplanPressureThreshold),
           window_size: Number(resolvedIntMcWindowSize),
           warmup_slices: Number(resolvedIntMcWarmupSlices),
           prediction_horizon_slices: Number(resolvedIntMcPredictionHorizonSlices),
@@ -1314,6 +1449,7 @@ const manifest = {
           predicted_contact_plan_path: predictedContactPlanPath,
           contact_plan_precision: contactPrediction?.precision ?? null,
           contact_plan_recall: contactPrediction?.recall ?? null,
+          contact_plan_prediction_windows: contactPrediction?.predictionWindows ?? null,
         }
       : null,
     validation: {
@@ -1356,6 +1492,8 @@ const manifest = {
       congestion_recall_global: trafficEvaluation.link_reconstruction.congestion_recall_over_global_truth,
       unknown_node_samples: trafficEvaluation.node_reconstruction.unknown_node_samples,
       unknown_link_samples: trafficEvaluation.link_reconstruction.unknown_link_samples,
+      oam_prior_node_estimates: trafficEvaluation.node_reconstruction.oam_prior_node_estimates,
+      oam_prior_link_estimates: trafficEvaluation.link_reconstruction.oam_prior_link_estimates,
     },
     probe_int: {
       node_sample_coverage: probeEvaluation.node_reconstruction.node_sample_coverage,
@@ -1369,6 +1507,8 @@ const manifest = {
       congestion_recall_global: probeEvaluation.link_reconstruction.congestion_recall_over_global_truth,
       unknown_node_samples: probeEvaluation.node_reconstruction.unknown_node_samples,
       unknown_link_samples: probeEvaluation.link_reconstruction.unknown_link_samples,
+      oam_prior_node_estimates: probeEvaluation.node_reconstruction.oam_prior_node_estimates,
+      oam_prior_link_estimates: probeEvaluation.link_reconstruction.oam_prior_link_estimates,
       full_time_step_pass: coverageAudit.summary.pass,
       passed_slices: coverageAudit.summary.passed_slices,
       failed_slices: coverageAudit.summary.failed_slices,
@@ -1383,11 +1523,18 @@ const manifest = {
           topology_down_link_samples: intMcEvaluation.reconstruction.topology_down_link_samples,
           unknown_link_samples: intMcEvaluation.reconstruction.unknown_link_samples,
           status_accuracy_all_links: intMcEvaluation.reconstruction.status_accuracy_all_links,
+          node_completion_coverage: intMcEvaluation.node_reconstruction?.node_completion_coverage ?? null,
+          direct_node_observation_rate: intMcEvaluation.node_reconstruction?.direct_observation_rate ?? null,
+          inferred_node_rate: intMcEvaluation.node_reconstruction?.inferred_rate ?? null,
+          observed_node_samples: intMcEvaluation.node_reconstruction?.observed_node_samples ?? null,
+          inferred_node_samples: intMcEvaluation.node_reconstruction?.inferred_node_samples ?? null,
+          node_mode_accuracy_all_nodes: intMcEvaluation.node_reconstruction?.mode_accuracy_all_nodes ?? null,
           contact_plan_precision: predictedContactPlan?.evaluation?.precision ?? null,
           contact_plan_recall: predictedContactPlan?.evaluation?.recall ?? null,
           contact_plan_accuracy: predictedContactPlan?.evaluation?.accuracy ?? null,
           contact_plan_mean_slice_jaccard: predictedContactPlan?.evaluation?.mean_slice_jaccard ?? null,
           metrics: intMcEvaluation.metrics,
+          node_metrics: intMcEvaluation.node_reconstruction?.metrics ?? null,
         }
       : null,
   },
@@ -1402,6 +1549,16 @@ const manifest = {
     stage2_int_dir: stage2Dir,
     traffic_ground_oam_dir: trafficGroundDir,
     probe_ground_oam_dir: probeGroundDir,
+    traffic_ground_oam_estimate_graph_json: join(trafficGroundDir, "ground-oam-estimate-graph.json"),
+    probe_ground_oam_estimate_graph_json: join(probeGroundDir, "ground-oam-estimate-graph.json"),
+    traffic_ground_oam_control_actions_csv: join(trafficGroundDir, "ground-oam-control-actions.csv"),
+    probe_ground_oam_control_actions_csv: join(probeGroundDir, "ground-oam-control-actions.csv"),
+    traffic_overhead_by_slice_csv: join(stage2Dir, "traffic-int-overhead-by-slice.csv"),
+    traffic_link_overhead_csv: join(stage2Dir, "traffic-int-link-overhead.csv"),
+    traffic_node_overhead_csv: join(stage2Dir, "traffic-int-node-overhead.csv"),
+    probe_overhead_by_slice_csv: join(stage2Dir, `probe-int-overhead-by-slice-${algorithm}.csv`),
+    probe_link_overhead_csv: join(stage2Dir, `probe-int-link-overhead-${algorithm}.csv`),
+    probe_node_overhead_csv: join(stage2Dir, `probe-int-node-overhead-${algorithm}.csv`),
     manifest_json: join(runDir, "int-experiment-manifest.json"),
     readme_md: join(runDir, "README.md"),
     input_validation_json: join(runDir, "input-dataset-validation.json"),
@@ -1417,14 +1574,21 @@ const manifest = {
     verification_md: join(runDir, "int-experiment-verification.md"),
     file_index_json: join(runDir, "int-experiment-file-index.json"),
     file_index_md: join(runDir, "int-experiment-file-index.md"),
+    int_mc_reconstructed_nodes_csv: isIntMc ? join(probeGroundDir, "ground-mc-reconstructed-nodes.csv") : "",
     int_mc_reconstructed_links_csv: isIntMc ? join(probeGroundDir, "ground-mc-reconstructed-links.csv") : "",
+    int_mc_node_errors_csv: isIntMc ? join(probeGroundDir, "int-mc-node-errors.csv") : "",
     int_mc_link_errors_csv: isIntMc ? join(probeGroundDir, "int-mc-link-errors.csv") : "",
+    int_mc_node_matrix_summary_csv: isIntMc ? join(probeGroundDir, "int-mc-node-matrix-summary.csv") : "",
     int_mc_matrix_summary_csv: isIntMc ? join(probeGroundDir, "int-mc-matrix-summary.csv") : "",
     int_mc_evaluation_json: isIntMc ? join(probeGroundDir, "int-mc-evaluation.json") : "",
     int_mc_contact_plan_json: isIntMc ? join(stage2Dir, `int-mc-contact-plan-${algorithm}.json`) : "",
+    int_mc_sampling_mask_csv: isIntMc ? join(stage2Dir, `probe-sampling-mask-${algorithm}.csv`) : "",
+    int_mc_selection_report_json: isIntMc ? join(stage2Dir, `probe-coverage-${algorithm}.json`) : "",
     predicted_contact_plan_json: isIntMc ? predictedContactPlanPath : "",
     predicted_contact_plan_csv: isIntMc ? join(stage2Dir, "predicted-contact-plan.csv") : "",
     predicted_contact_plan_summary_csv: isIntMc ? join(stage2Dir, "predicted-contact-plan-summary.csv") : "",
+    predicted_topology_forecast_csv: isIntMc ? join(stage2Dir, "predicted-topology-forecast.csv") : "",
+    predicted_contact_plan_windows_csv: isIntMc ? join(stage2Dir, "predicted-contact-plan-windows.csv") : "",
     predicted_contact_plan_evaluation_json: isIntMc ? join(stage2Dir, "predicted-contact-plan-evaluation.json") : "",
   },
 };

@@ -136,6 +136,8 @@ type IntProcessHopEvent = {
   observed_link_active: boolean | "";
   observed_link_utilization_percent: number;
   observed_link_latency_ms: number;
+  observed_link_queue_latency_ms: number;
+  observed_link_propagation_latency_ms: number;
   observed_link_capacity_mbps: number;
   observed_link_congestion_percent: number;
   carried_traffic_mbps: number;
@@ -194,6 +196,7 @@ type IntProcessLink = {
   active_estimate: boolean | "";
   utilization_percent_estimate: number;
   latency_ms_estimate: number;
+  queue_latency_ms_estimate?: number;
   capacity_mbps_estimate: number;
   congestion_percent_estimate: number;
   confidence: number;
@@ -395,6 +398,8 @@ function processSliceFromTelemetry(slice: IntTelemetrySlice): IntProcessSlice {
       observed_link_active: record.observedLinkActive,
       observed_link_utilization_percent: record.observedLinkUtilizationPercent,
       observed_link_latency_ms: record.observedLinkLatencyMs,
+      observed_link_queue_latency_ms: record.observedLinkQueueLatencyMs,
+      observed_link_propagation_latency_ms: record.observedLinkPropagationLatencyMs,
       observed_link_capacity_mbps: record.observedLinkCapacityMbps,
       observed_link_congestion_percent: record.observedLinkCongestionPercent,
       carried_traffic_mbps: 0,
@@ -451,6 +456,7 @@ function processSliceFromTelemetry(slice: IntTelemetrySlice): IntProcessSlice {
         active_estimate: link.active,
         utilization_percent_estimate: link.utilizationPercent,
         latency_ms_estimate: link.latencyMs,
+        queue_latency_ms_estimate: 0,
         capacity_mbps_estimate: link.capacityMbps,
         congestion_percent_estimate: link.congestionPercent,
         confidence: link.observed ? 1 : 0,
@@ -512,6 +518,8 @@ function processToTelemetrySlice(processSlice: IntProcessSlice, fallback: IntTel
       observedLinkActive: event.observed_link_active,
       observedLinkUtilizationPercent: event.observed_link_utilization_percent,
       observedLinkLatencyMs: event.observed_link_latency_ms,
+      observedLinkQueueLatencyMs: event.observed_link_queue_latency_ms ?? 0,
+      observedLinkPropagationLatencyMs: event.observed_link_propagation_latency_ms ?? 0,
       observedLinkCapacityMbps: event.observed_link_capacity_mbps,
       observedLinkCongestionPercent: event.observed_link_congestion_percent,
     })),
@@ -1522,6 +1530,8 @@ function ProbeProcessPanel({
             <dd>{selectedHop.observed_link_id || "-"}</dd>
             <dt>链路状态</dt>
             <dd>{selectedHop.observed_link_status || "unknown"} / {selectedHop.observed_link_utilization_percent.toFixed(1)}% / {selectedHop.observed_link_latency_ms.toFixed(1)} ms</dd>
+            <dt>排队时延</dt>
+            <dd>{(selectedHop.observed_link_queue_latency_ms ?? 0).toFixed(2)} ms</dd>
             <dt>容量</dt>
             <dd>{selectedHop.observed_link_capacity_mbps.toLocaleString()} Mbps</dd>
           </dl>

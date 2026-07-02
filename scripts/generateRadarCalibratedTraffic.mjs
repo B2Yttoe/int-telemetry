@@ -79,9 +79,9 @@ function validateProfile(profile) {
 }
 
 const args = process.argv.slice(2);
-const snapshotPath = resolve(argValue(args, "--snapshot", "data/tle-snapshots/celestrak-starlink-real-walker-72x22.json"));
+const snapshotPath = resolve(argValue(args, "--snapshot", "data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-47x14.json"));
 const profilePath = resolve(argValue(args, "--profile", "traffic-calibration/cloudflare-radar-profile.json"));
-const outPath = resolve(argValue(args, "--out", "examples/datasets/radar-calibrated-starlink-72x22-48-traffic.csv"));
+const outPath = resolve(argValue(args, "--out", "examples/datasets/radar-calibrated-starlink-main-47x14-48-traffic.csv"));
 const metadataOutPath = resolve(argValue(args, "--metadata-out", outPath.replace(/\.csv$/i, ".metadata.json")));
 const slices = Number(argValue(args, "--slices", "48"));
 
@@ -115,6 +115,8 @@ function add(row) {
   }
   rows.push({
     task_id: row.task_id,
+    calibration_class_id: row.calibration_class_id ?? "",
+    calibration_region_id: row.calibration_region_id ?? "",
     time: `T${String(startSlice).padStart(2, "0")}`,
     start_slice: startSlice,
     duration_slices: durationSlices,
@@ -158,6 +160,8 @@ if (profile.backbone_flows?.enabled !== false) {
     const regionWeight = normalizeShare(region.demand_weight, 1);
     add({
       task_id: `RADAR-BACKBONE-${String(index + 1).padStart(2, "0")}`,
+      calibration_class_id: "backbone",
+      calibration_region_id: region.id,
       start_slice: 0,
       duration_slices: Math.min(slices, Number(profile.backbone_flows.duration_slices ?? slices)),
       ...endpoints,
@@ -192,6 +196,8 @@ for (let slice = 0; slice < slices; slice += 1) {
 
       add({
         task_id: `RADAR-${String(slice).padStart(2, "0")}-${region.id}-${trafficClass.id}`,
+        calibration_class_id: trafficClass.id,
+        calibration_region_id: region.id,
         start_slice: slice,
         duration_slices: Number(trafficClass.duration_slices ?? 1),
         ...endpoints,
@@ -209,6 +215,8 @@ for (let slice = 0; slice < slices; slice += 1) {
       const anchor = regionAnchor(region, slice, regionIndex + 5);
       add({
         task_id: `RADAR-COMPUTE-${String(slice).padStart(2, "0")}-${region.id}`,
+        calibration_class_id: "local-compute",
+        calibration_region_id: region.id,
         start_slice: slice,
         duration_slices: Number(local.duration_slices ?? 3),
         node_id: nodeId(anchor.plane, anchor.slot, planes, slots),
@@ -233,6 +241,8 @@ for (const anomaly of profile.anomalies ?? []) {
     const endpoints = routedEndpoints(region, { id: anomaly.id }, start, index + 11);
     add({
       task_id: `RADAR-ANOMALY-${anomaly.id}-${region.id}`,
+      calibration_class_id: `anomaly:${anomaly.id}`,
+      calibration_region_id: region.id,
       start_slice: start,
       duration_slices: duration,
       ...endpoints,
@@ -270,6 +280,17 @@ const localTasks = rows.filter((row) => row.node_id).length;
 const totalTrafficMbps = round(rows.reduce((sum, row) => sum + Number(row.traffic_mbps || 0), 0), 2);
 const totalComputeUnits = round(rows.reduce((sum, row) => sum + Number(row.compute_units || 0), 0), 2);
 const timeWeights = Array.from({ length: slices }, (_, slice) => normalizeShare(profileTimePoint(profile, slice).traffic_weight, 1));
+const countBy = (key) =>
+  rows.reduce((counts, row) => {
+    const value = String(row[key] || "unknown");
+    counts[value] = (counts[value] ?? 0) + 1;
+    return counts;
+  }, {});
+const trafficMbpsByClass = rows.reduce((counts, row) => {
+  const value = String(row.calibration_class_id || "unknown");
+  counts[value] = round((counts[value] ?? 0) + Number(row.traffic_mbps || 0), 2);
+  return counts;
+}, {});
 const metadata = {
   schema: "int-temerity-radar-calibrated-traffic-metadata/v1",
   generated_at: new Date().toISOString(),
@@ -288,6 +309,10 @@ const metadata = {
     profile_id: profile.profile_id,
     data_mode: profile.data_mode,
     not_raw_cloudflare_export: Boolean(profile.not_raw_cloudflare_export),
+    radar_entity: profile.radar_entity ?? null,
+    observed_dimensions: profile.observed_dimensions ?? [],
+    calibration_mapping: profile.calibration_mapping ?? {},
+    quality_model: profile.quality_model ?? null,
     source_references: profile.source_references,
   },
   output: {
@@ -302,6 +327,16 @@ const metadata = {
     min_time_weight: round(Math.min(...timeWeights), 3),
     max_time_weight: round(Math.max(...timeWeights), 3),
     anomaly_count: profile.anomalies?.length ?? 0,
+    task_type_counts: countBy("task_type"),
+    calibration_class_counts: countBy("calibration_class_id"),
+    calibration_region_counts: countBy("calibration_region_id"),
+    traffic_mbps_by_calibration_class: trafficMbpsByClass,
+    realism_boundary: {
+      cloudflare_data_scope: "AS14593 public aggregate Radar dimensions",
+      not_operator_internal_trace: true,
+      not_satellite_internal_isl_trace: true,
+      synthetic_mapping: true,
+    },
   },
 };
 

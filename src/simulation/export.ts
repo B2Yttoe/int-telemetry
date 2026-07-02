@@ -36,6 +36,12 @@ const csvEscape = (value: Scalar) => {
 
 const maxOf = (values: number[]) => (values.length > 0 ? Math.max(...values) : 0);
 const minOf = (values: number[]) => (values.length > 0 ? Math.min(...values) : 0);
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+function estimateQueueLatencyMs(queuedTrafficMb: number, capacityMbps: number) {
+  if (!Number.isFinite(queuedTrafficMb) || !Number.isFinite(capacityMbps) || queuedTrafficMb <= 0 || capacityMbps <= 0) return 0;
+  return (queuedTrafficMb * 8 * 1000) / capacityMbps;
+}
 
 function taskActiveInSlice(task: TaskTrafficRecord, sliceIndex: number) {
   const duration = Math.max(1, task.duration_slices || 1);
@@ -69,6 +75,57 @@ function routeLinkSummary(route: NetworkSlice["routes"][number], linksById: Map<
     maxCongestionPercent: maxOf(links.map((link) => link.state.congestionPercent)),
     maxQueuedMb: maxOf(links.map((link) => link.state.queuedTrafficMb)),
     maxDroppedMb: maxOf(links.map((link) => link.state.droppedTrafficMb)),
+  };
+}
+
+function taskDeliveryState(route: NetworkSlice["routes"][number], task?: TaskTrafficRecord) {
+  if (route.status === "unroutable") return "unroutable";
+  if (route.status === "not-requested") return task?.node_id ? "local-compute" : "not-requested";
+  if (route.status === "local") return "local";
+  if (route.droppedTrafficMb > 0 && route.carriedTrafficMbps <= 0) return "dropped";
+  if (route.droppedTrafficMb > 0) return "partial-with-drop";
+  if (route.queuedTrafficMb > 0 && route.carriedTrafficMbps < route.trafficMbps) return "partial-queued";
+  if (route.queuedTrafficMb > 0) return "queued";
+  if (route.carriedTrafficMbps > 0 || route.trafficMbps <= 0) return "delivered";
+  return "blocked";
+}
+
+function taskLatencyMetrics(route: NetworkSlice["routes"][number] | undefined, task?: TaskTrafficRecord) {
+  if (!route) {
+    return {
+      routeLatencyMs: 0,
+      queueDelayMs: 0,
+      estimatedEndToEndLatencyMs: 0,
+      deliveryRatio: 0,
+      deliveryState: "missing",
+      delivered: false,
+      dropped: false,
+    };
+  }
+
+  const trafficMbps = Math.max(route.trafficMbps, task?.traffic_mbps ?? 0, 0);
+  const carriedMbps = Math.max(route.carriedTrafficMbps, 0);
+  const serviceMbps = Math.max(carriedMbps, trafficMbps, 1);
+  const queueDelayMs =
+    route.status === "routed" && route.queuedTrafficMb > 0
+      ? (Math.max(route.queuedTrafficMb, 0) * 8 * 1000) / serviceMbps
+      : 0;
+  const deliveryRatio =
+    trafficMbps > 0
+      ? clamp(carriedMbps / trafficMbps, 0, 1)
+      : route.status === "unroutable"
+        ? 0
+        : 1;
+  const deliveryState = taskDeliveryState(route, task);
+
+  return {
+    routeLatencyMs: route.latencyMs,
+    queueDelayMs: round(queueDelayMs, 4),
+    estimatedEndToEndLatencyMs: round(route.latencyMs + queueDelayMs, 4),
+    deliveryRatio: round(deliveryRatio, 4),
+    deliveryState,
+    delivered: deliveryState === "delivered" || deliveryState === "local" || deliveryState === "local-compute",
+    dropped: route.droppedTrafficMb > 0 || deliveryState === "dropped",
   };
 }
 
@@ -364,6 +421,13 @@ export function linkSnapshotRows(slices: NetworkSlice[]): ExportRow[] {
       line_of_sight: link.state.lineOfSight,
       distance_km: round(link.state.distanceKm, 3),
       latency_ms: round(link.state.latencyMs, 4),
+      queue_latency_ms: round(
+        estimateQueueLatencyMs(
+          link.state.queuedTrafficMb,
+          link.state.linkBudget?.effective_capacity_mbps ?? link.state.bandwidthMbps,
+        ),
+        4,
+      ),
       bandwidth_mbps: round(link.state.bandwidthMbps, 3),
       utilization_percent: round(link.state.utilizationPercent, 3),
       demand_traffic_mbps: round(link.state.demandTrafficMbps, 3),
@@ -392,30 +456,40 @@ export function linkSnapshotRows(slices: NetworkSlice[]): ExportRow[] {
 
 export function routeSnapshotRows(slices: NetworkSlice[]): ExportRow[] {
   return slices.flatMap((slice) =>
-    slice.routes.map((route) => ({
-      slice_index: slice.index,
-      time: slice.time,
-      minute: slice.minute,
-      task_id: route.task_id,
-      source: route.source,
-      target: route.target,
-      algorithm: route.algorithm,
-      status: route.status,
-      task_type: route.taskType ?? "",
-      hop_count: route.hopCount,
-      distance_km: round(route.distanceKm, 3),
-      latency_ms: round(route.latencyMs, 4),
-      traffic_mbps: round(route.trafficMbps, 3),
-      priority: route.priority,
-      carried_traffic_mbps: round(route.carriedTrafficMbps, 3),
-      queued_traffic_mb: round(route.queuedTrafficMb, 3),
-      dropped_traffic_mb: round(route.droppedTrafficMb, 3),
-      task_telemetry_node_id: route.taskTelemetryNodeId ?? "",
-      task_telemetry_generated_mb: round(route.taskTelemetryGeneratedMb, 3),
-      path: route.path.join(" > "),
-      link_ids: route.linkIds.join(" > "),
-      reason: route.reason ?? "",
-    })),
+    slice.routes.map((route) => {
+      const latency = taskLatencyMetrics(route);
+      return {
+        slice_index: slice.index,
+        time: slice.time,
+        minute: slice.minute,
+        task_id: route.task_id,
+        source: route.source,
+        target: route.target,
+        algorithm: route.algorithm,
+        status: route.status,
+        task_type: route.taskType ?? "",
+        hop_count: route.hopCount,
+        distance_km: round(route.distanceKm, 3),
+        latency_ms: round(route.latencyMs, 4),
+        route_latency_ms: round(latency.routeLatencyMs, 4),
+        queue_delay_ms: latency.queueDelayMs,
+        estimated_end_to_end_latency_ms: latency.estimatedEndToEndLatencyMs,
+        delivery_ratio: latency.deliveryRatio,
+        delivery_state: latency.deliveryState,
+        delivered: latency.delivered,
+        dropped: latency.dropped,
+        traffic_mbps: round(route.trafficMbps, 3),
+        priority: route.priority,
+        carried_traffic_mbps: round(route.carriedTrafficMbps, 3),
+        queued_traffic_mb: round(route.queuedTrafficMb, 3),
+        dropped_traffic_mb: round(route.droppedTrafficMb, 3),
+        task_telemetry_node_id: route.taskTelemetryNodeId ?? "",
+        task_telemetry_generated_mb: round(route.taskTelemetryGeneratedMb, 3),
+        path: route.path.join(" > "),
+        link_ids: route.linkIds.join(" > "),
+        reason: route.reason ?? "",
+      };
+    }),
   );
 }
 
@@ -448,6 +522,7 @@ export function taskTraceRows(slices: NetworkSlice[], tasks: TaskTrafficRecord[]
               ? [task.source]
               : [];
       const impactedNodes = impactedNodeIds.map((nodeId) => nodesById.get(nodeId)).filter(Boolean) as NetworkSlice["nodes"];
+      const latency = taskLatencyMetrics(route, task);
 
       return {
         slice_index: slice.index,
@@ -477,6 +552,14 @@ export function taskTraceRows(slices: NetworkSlice[], tasks: TaskTrafficRecord[]
         hop_count: route?.hopCount ?? 0,
         distance_km: route ? round(route.distanceKm, 3) : 0,
         latency_ms: route ? round(route.latencyMs, 4) : 0,
+        route_latency_ms: round(latency.routeLatencyMs, 4),
+        queue_delay_ms: latency.queueDelayMs,
+        estimated_end_to_end_latency_ms: latency.estimatedEndToEndLatencyMs,
+        delivery_ratio: latency.deliveryRatio,
+        delivery_state: latency.deliveryState,
+        delivered: latency.delivered,
+        dropped: latency.dropped,
+        latency_model: "route_latency_plus_queue_delay",
         path: route?.path.join(" > ") ?? "",
         link_ids: route?.linkIds.join(" > ") ?? "",
         bottleneck_link_id: linkSummary.bottleneck?.id ?? "",
@@ -535,6 +618,13 @@ export function businessLinkImpactRows(slices: NetworkSlice[], tasks: TaskTraffi
           queued_traffic_mb: round(link.state.queuedTrafficMb, 3),
           dropped_traffic_mb: round(link.state.droppedTrafficMb, 3),
           latency_ms: round(link.state.latencyMs, 4),
+          queue_latency_ms: round(
+            estimateQueueLatencyMs(
+              link.state.queuedTrafficMb,
+              link.state.linkBudget?.effective_capacity_mbps ?? link.state.bandwidthMbps,
+            ),
+            4,
+          ),
           distance_km: round(link.state.distanceKm, 3),
           link_status: link.state.status,
           is_active: link.state.isActive,

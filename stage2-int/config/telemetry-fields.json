@@ -16,6 +16,7 @@
     "is_active",
     "utilization_percent",
     "latency_ms",
+    "queue_latency_ms",
     "effective_capacity_mbps",
     "queued_traffic_mb",
     "dropped_traffic_mb",
@@ -33,4 +34,3 @@
     "next_hop"
   ]
 }
-

@@ -34,6 +34,9 @@
     "observed_link_status": { "type": "string" },
     "observed_link_utilization_percent": { "type": "number" },
     "observed_link_latency_ms": { "type": "number" },
+    "observed_link_queue_latency_ms": { "type": "number" },
+    "observed_link_propagation_latency_ms": { "type": "number" },
+    "observed_link_queue_latency_formula": { "type": "string" },
     "observed_link_capacity_mbps": { "type": "number" }
   },
   "additionalProperties": true

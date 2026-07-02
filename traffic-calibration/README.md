@@ -33,16 +33,16 @@ scripts/generateRadarCalibratedTraffic.mjs
 real-tle-sgp4 卫星模型 / INT 遥测实验
 ```
 
-## 生成 72x22 真实规模数据集
+## 生成 Starlink 主壳层 47x14 数据集
 
 ```bash
-npm run generate:radar-traffic -- --snapshot data/tle-snapshots/celestrak-starlink-real-walker-72x22.json --profile traffic-calibration/cloudflare-radar-profile.json --out examples/datasets/radar-calibrated-starlink-72x22-48-traffic.csv --slices 48
+npm run generate:radar-traffic -- --snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-47x14.json --profile traffic-calibration/cloudflare-radar-profile.json --out examples/datasets/radar-calibrated-starlink-main-47x14-48-traffic.csv --slices 48
 ```
 
 对应元数据：
 
 ```text
-examples/datasets/radar-calibrated-starlink-72x22-48-traffic.metadata.json
+examples/datasets/radar-calibrated-starlink-main-47x14-48-traffic.metadata.json
 ```
 
 当前生成结果：
@@ -60,7 +60,7 @@ anomaly_count: 3
 校验：
 
 ```bash
-npm run validate:dataset -- --tasks examples/datasets/radar-calibrated-starlink-72x22-48-traffic.csv --tle-snapshot data/tle-snapshots/celestrak-starlink-real-walker-72x22.json
+npm run validate:dataset -- --tasks examples/datasets/radar-calibrated-starlink-main-47x14-48-traffic.csv --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-47x14.json
 ```
 
 当前校验结果：
@@ -68,19 +68,19 @@ npm run validate:dataset -- --tasks examples/datasets/radar-calibrated-starlink-
 ```text
 Warnings: 0
 Errors: 0
-Dataset fingerprint: d6d36270
+Dataset fingerprint: 4e76d3b4
 ```
 
-## 生成 8x8 快速实验数据集
+## 生成主壳层 8x8 快速实验数据集
 
 ```bash
-npm run generate:radar-traffic -- --snapshot data/tle-snapshots/celestrak-starlink-real-walker-8x8.json --profile traffic-calibration/cloudflare-radar-profile.json --out examples/datasets/radar-calibrated-starlink-8x8-48-traffic.csv --slices 48
+npm run generate:radar-traffic -- --snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json --profile traffic-calibration/cloudflare-radar-profile.json --out examples/datasets/radar-calibrated-starlink-main-8x8-48-traffic.csv --slices 48
 ```
 
 校验：
 
 ```bash
-npm run validate:dataset -- --tasks examples/datasets/radar-calibrated-starlink-8x8-48-traffic.csv --tle-snapshot data/tle-snapshots/celestrak-starlink-real-walker-8x8.json
+npm run validate:dataset -- --tasks examples/datasets/radar-calibrated-starlink-main-8x8-48-traffic.csv --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json
 ```
 
 当前校验结果：
@@ -94,7 +94,15 @@ Dataset fingerprint: 2ccc391f
 8x8 INT 烟测：
 
 ```bash
-npm run int:experiment -- --tasks examples/datasets/radar-calibrated-starlink-8x8-48-traffic.csv --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-real-walker-8x8.json --mode operational --algorithm path-balance --out stage2-int/runs/radar-calibrated-8x8-int-smoke --skip-verify
+npm run int:experiment -- --tasks examples/datasets/radar-calibrated-starlink-main-8x8-48-traffic.csv --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json --mode operational --algorithm path-balance --out stage2-int/runs/radar-calibrated-main-8x8-int-smoke --skip-verify
+```
+
+## 生成 72x22 规模压力对照数据集
+
+`data/tle-snapshots/celestrak-starlink-real-walker-72x22.json` 仍可用于规模压力对照。需要注意，该快照来自当前 CelesTrak 公开目录中可抽样的较大壳层，平均约 `43°/490 km`，不是默认主壳层 `53°/550 km`。
+
+```bash
+npm run generate:radar-traffic -- --snapshot data/tle-snapshots/celestrak-starlink-real-walker-72x22.json --profile traffic-calibration/cloudflare-radar-profile.json --out examples/datasets/radar-calibrated-starlink-72x22-48-traffic.csv --slices 48
 ```
 
 ## 如何替换为真实 Radar 导出

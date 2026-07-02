@@ -19,7 +19,7 @@ export type SimulationMode = "autonomous" | "operational";
 export type TrafficProfile = "empty" | "low-load" | "normal" | "high-load" | "hotspot" | "burst" | "long-duration" | "uploaded";
 export type TaskType = "compute" | "routing" | "downlink" | "telemetry" | "mixed" | "background" | "burst";
 export type OrbitModel = "analytic-walker" | "tle-sgp4" | "real-tle-sgp4";
-export type TleCatalogSource = "synthetic-walker" | "celestrak" | "space-track" | "file";
+export type TleCatalogSource = "synthetic-walker" | "synthetic-starlink-main-shell" | "celestrak" | "space-track" | "file";
 export type RoutingAlgorithm = "shortest-path";
 export type RoutingStatus = "routed" | "unroutable" | "local" | "not-requested";
 export type SatelliteOperationalStatus = "active" | "decaying" | "deorbited" | "backup";
@@ -591,6 +591,10 @@ export interface RealTleCatalogSnapshot {
     satellites_per_plane: number;
     selection_strategy: string;
     raan_cluster_threshold_deg: number;
+    target_inclination_deg?: number;
+    target_altitude_km?: number;
+    selected_shell_key?: string;
+    target_shell_distance?: number;
   };
   satellites: TleSatelliteRecord[];
 }

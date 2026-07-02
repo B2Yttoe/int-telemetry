@@ -70,7 +70,7 @@ const entry = `
       0,
     );
     const summary = {
-      trace_schema_version: "stage1-business-causality-trace-v2",
+      trace_schema_version: "stage1-business-causality-trace-v3",
       generated_at: new Date().toISOString(),
       metadata,
       validation,
@@ -85,6 +85,8 @@ const entry = `
         task_type_telemetry_trace_rows: taskTelemetryRows.length,
         task_type_telemetry_generated_mb: Number(taskTelemetryGeneratedMb.toFixed(2)),
         max_task_path_hops: maxOf(taskTraceRows.map((row) => row.hop_count)),
+        max_task_end_to_end_latency_ms: maxOf(taskTraceRows.map((row) => row.estimated_end_to_end_latency_ms)),
+        max_task_queue_delay_ms: maxOf(taskTraceRows.map((row) => row.queue_delay_ms)),
         max_observed_link_utilization_percent: maxOf(taskTraceRows.map((row) => row.max_link_utilization_percent)),
         max_observed_path_cpu_percent: maxOf(taskTraceRows.map((row) => row.max_path_cpu_percent)),
       },
@@ -99,6 +101,12 @@ const entry = `
           .every((row) => row.impacted_node_count > 0),
         link_impacts_present: linkImpactRows.length > 0,
         node_impacts_present: nodeImpactRows.length > 0,
+        task_latency_fields_present: taskTraceRows.every(
+          (row) =>
+            typeof row.estimated_end_to_end_latency_ms === "number" &&
+            typeof row.queue_delay_ms === "number" &&
+            typeof row.delivery_state === "string",
+        ),
         task_type_telemetry_impacts_present:
           taskTelemetryRows.length > 0 &&
           taskTelemetryGeneratedMb > 0 &&

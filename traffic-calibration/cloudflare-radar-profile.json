@@ -11,6 +11,26 @@
       "used_for": "Global Internet traffic, DNS, technology trend, and anonymized aggregate data source context."
     },
     {
+      "name": "Cloudflare Radar AS14593 overview",
+      "url": "https://radar.cloudflare.com/as14593",
+      "used_for": "Starlink public ASN identity, traffic trend categories, protocol adoption, HTTP request distribution, DNS and routing context."
+    },
+    {
+      "name": "Cloudflare Radar AS14593 traffic",
+      "url": "https://radar.cloudflare.com/traffic/as14593",
+      "used_for": "Starlink-scoped traffic volume, HTTP traffic, mobile/desktop, bot/human, content type, API traffic, outages, anomalies, and geographic distribution dimensions."
+    },
+    {
+      "name": "Cloudflare Radar AS14593 quality",
+      "url": "https://radar.cloudflare.com/quality/as14593",
+      "used_for": "Starlink-scoped bandwidth, latency, DNS response time, jitter and aggregated speed-test quality context."
+    },
+    {
+      "name": "Cloudflare Radar AS14593 routing",
+      "url": "https://radar.cloudflare.com/routing/as14593",
+      "used_for": "Starlink ASN routing statistics, announced address space, BGP announcements and connectivity context."
+    },
+    {
       "name": "Cloudflare Radar NetFlows",
       "url": "https://developers.cloudflare.com/radar/investigate/netflows/",
       "used_for": "Network traffic trend context across Cloudflare edge routers."
@@ -21,6 +41,36 @@
       "used_for": "HTTP request class, content/API traffic, bot/human traffic, and traffic mix concepts."
     }
   ],
+  "radar_entity": {
+    "asn": 14593,
+    "name": "SPACEX-STARLINK",
+    "operator": "Space Exploration Technologies Corporation",
+    "scope": "public ASN-level aggregate observations, not satellite internal telemetry"
+  },
+  "observed_dimensions": [
+    "traffic_trends",
+    "http_requests",
+    "mobile_vs_desktop",
+    "bot_vs_human_html",
+    "content_type_distribution",
+    "api_traffic_share",
+    "internet_outages",
+    "traffic_anomalies",
+    "geographical_distribution",
+    "ip_version_adoption",
+    "http_version_adoption",
+    "dns_transport_and_query_type",
+    "bandwidth_latency_dns_quality",
+    "bgp_prefixes_and_announcements"
+  ],
+  "calibration_mapping": {
+    "traffic_trends": "time_series[].traffic_weight controls per-slice demand intensity.",
+    "mobile_desktop_and_geography": "regions[] distribute demand across constellation planes and slots.",
+    "bot_human_api": "time_series share fields drive human-web, API, automated and DNS/control task classes.",
+    "content_type_distribution": "traffic_classes include video, interactive, background sync, web, API, DNS and automated traffic.",
+    "quality_and_outages": "quality_model and anomalies[] create latency-sensitive windows, slowdown windows, burst windows and reduced-delivery pressure.",
+    "routing_context": "backbone_flows create persistent cross-region traffic resembling public ASN transit/egress pressure."
+  },
   "license_note": "If this profile is replaced with downloaded Cloudflare Radar API data, check Cloudflare Radar's current license and attribution requirements. The bundled profile is a deterministic calibration template, not a redistributed Radar export.",
   "slice_model": {
     "slices": 48,
@@ -85,17 +135,28 @@
     { "id": "oceania", "label": "Oceania", "demand_weight": 0.62, "plane_fraction": 0.88, "slot_offset": 19, "target_region": "east-asia" }
   ],
   "traffic_classes": [
-    { "id": "human-web", "task_type": "mixed", "share_key": "human_share", "base_mbps": 170, "compute_units": 14, "memory_gb": 3, "storage_gb": 10, "duration_slices": 2, "interval_slices": 1, "phase": 0, "priority": 2 },
-    { "id": "api", "task_type": "telemetry", "share_key": "api_share", "base_mbps": 115, "compute_units": 18, "memory_gb": 4, "storage_gb": 12, "duration_slices": 2, "interval_slices": 2, "phase": 1, "priority": 1 },
-    { "id": "background-sync", "task_type": "background", "share_key": "api_share", "base_mbps": 135, "compute_units": 10, "memory_gb": 3, "storage_gb": 20, "duration_slices": 4, "interval_slices": 3, "phase": 2, "priority": 3 },
-    { "id": "automated", "task_type": "routing", "share_key": "bot_share", "base_mbps": 260, "compute_units": 8, "memory_gb": 2, "storage_gb": 8, "duration_slices": 2, "interval_slices": 4, "phase": 0, "priority": 4 },
-    { "id": "dns-control", "task_type": "telemetry", "share_key": "api_share", "base_mbps": 45, "compute_units": 6, "memory_gb": 1, "storage_gb": 4, "duration_slices": 1, "interval_slices": 4, "phase": 3, "priority": 1 }
+    { "id": "human-web", "task_type": "mixed", "radar_dimension": "HTTP requests / human web", "share_key": "human_share", "base_mbps": 170, "compute_units": 14, "memory_gb": 3, "storage_gb": 10, "duration_slices": 2, "interval_slices": 1, "phase": 0, "priority": 2 },
+    { "id": "video-streaming", "task_type": "background", "radar_dimension": "content type / video and large objects", "share_key": "human_share", "base_mbps": 360, "compute_units": 9, "memory_gb": 2.5, "storage_gb": 18, "duration_slices": 3, "interval_slices": 2, "phase": 0, "priority": 3 },
+    { "id": "interactive-realtime", "task_type": "routing", "radar_dimension": "latency-sensitive human traffic", "share_key": "human_share", "base_mbps": 95, "compute_units": 16, "memory_gb": 2, "storage_gb": 6, "duration_slices": 1, "interval_slices": 2, "phase": 1, "priority": 1 },
+    { "id": "api", "task_type": "telemetry", "radar_dimension": "API traffic", "share_key": "api_share", "base_mbps": 115, "compute_units": 18, "memory_gb": 4, "storage_gb": 12, "duration_slices": 2, "interval_slices": 2, "phase": 1, "priority": 1 },
+    { "id": "background-sync", "task_type": "background", "radar_dimension": "large background synchronization", "share_key": "api_share", "base_mbps": 135, "compute_units": 10, "memory_gb": 3, "storage_gb": 20, "duration_slices": 4, "interval_slices": 3, "phase": 2, "priority": 3 },
+    { "id": "software-update", "task_type": "background", "radar_dimension": "large downloads / software update style traffic", "share_key": "human_share", "base_mbps": 240, "compute_units": 7, "memory_gb": 2, "storage_gb": 36, "duration_slices": 5, "interval_slices": 6, "phase": 4, "priority": 4 },
+    { "id": "automated", "task_type": "routing", "radar_dimension": "bot / automated traffic", "share_key": "bot_share", "base_mbps": 260, "compute_units": 8, "memory_gb": 2, "storage_gb": 8, "duration_slices": 2, "interval_slices": 4, "phase": 0, "priority": 4 },
+    { "id": "dns-control", "task_type": "telemetry", "radar_dimension": "1.1.1.1 DNS query/control traffic", "share_key": "api_share", "base_mbps": 45, "compute_units": 6, "memory_gb": 1, "storage_gb": 4, "duration_slices": 1, "interval_slices": 4, "phase": 3, "priority": 1 }
   ],
   "anomalies": [
     { "id": "evening-human-spike", "start_slice": 18, "duration_slices": 3, "regions": ["na-east", "europe"], "classes": ["human-web", "api"], "traffic_multiplier": 1.45 },
+    { "id": "streaming-prime-window", "start_slice": 16, "duration_slices": 5, "regions": ["na-east", "na-west", "europe"], "classes": ["video-streaming"], "traffic_multiplier": 1.65 },
     { "id": "automated-scan-burst", "start_slice": 33, "duration_slices": 3, "regions": ["na-west", "east-asia"], "classes": ["automated"], "traffic_multiplier": 2.2 },
-    { "id": "regional-slowdown", "start_slice": 40, "duration_slices": 2, "regions": ["east-asia"], "classes": ["human-web", "api", "background-sync"], "traffic_multiplier": 0.55 }
+    { "id": "regional-slowdown", "start_slice": 40, "duration_slices": 2, "regions": ["east-asia"], "classes": ["human-web", "api", "background-sync", "interactive-realtime"], "traffic_multiplier": 0.55 },
+    { "id": "software-update-wave", "start_slice": 10, "duration_slices": 4, "regions": ["na-west", "europe", "oceania"], "classes": ["software-update", "background-sync"], "traffic_multiplier": 1.35 }
   ],
+  "quality_model": {
+    "latency_sensitive_classes": ["interactive-realtime", "api", "dns-control"],
+    "throughput_sensitive_classes": ["video-streaming", "background-sync", "software-update"],
+    "anomaly_sensitive_classes": ["human-web", "interactive-realtime", "api"],
+    "notes": "Cloudflare AS14593 quality pages expose bandwidth, latency, DNS response time and jitter dimensions. This profile maps those dimensions into traffic class priorities and anomaly windows rather than claiming raw speed-test traces."
+  },
   "local_compute": {
     "interval_slices": 4,
     "base_compute_units": 24,

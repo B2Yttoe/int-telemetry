@@ -58,6 +58,7 @@ const entry = `
     nodeSnapshotRows,
     routeSnapshotRows,
     rowsToCsv,
+    taskTraceRows,
   } from "./src/simulation/export.ts";
   import { effectiveTrafficTasks, parseTaskDataset, validateTaskDataset } from "./src/simulation/traffic.ts";
   import { verifyRealTleSnapshot } from "./src/simulation/realTleCatalog.ts";
@@ -132,6 +133,7 @@ const entry = `
     const links = linkSnapshotRows(slices);
     const routes = routeSnapshotRows(slices);
     const metrics = networkMetricRows(slices);
+    const taskTraces = taskTraceRows(slices, effectiveTasks);
     const metadata = experimentMetadata(context, slices);
     return {
       ok: true,
@@ -144,6 +146,7 @@ const entry = `
         links: links.length,
         routes: routes.length,
         metrics: metrics.length,
+        taskTraces: taskTraces.length,
       },
       files: {
         "metadata.json": JSON.stringify({ ...metadata, validation }, null, 2),
@@ -151,6 +154,7 @@ const entry = `
         "links.csv": rowsToCsv(links),
         "routes.csv": rowsToCsv(routes),
         "metrics.csv": rowsToCsv(metrics),
+        "task-traces.csv": rowsToCsv(taskTraces),
         ...(options.includeFullJson ? { "truth.json": experimentJson(context, slices) } : {}),
       },
     };
@@ -172,23 +176,26 @@ const result = await build({
 });
 
 await mkdir(".tmp", { recursive: true });
-const bundlePath = ".tmp/scenario-export.mjs";
+const bundlePath = `.tmp/scenario-export-${process.pid}-${Date.now()}.mjs`;
 await writeFile(bundlePath, result.outputFiles[0].text, "utf8");
-const { createScenarioExport } = await import(`${pathToFileURL(bundlePath).href}?t=${Date.now()}`);
-await rm(bundlePath, { force: true });
-
-const exported = createScenarioExport({
-  mode,
-  profile: effectiveProfile,
-  orbitModel,
-  tleSnapshotText,
-  timeSlices,
-  routingAlgorithm,
-  taskText,
-  taskFileName,
-  datasetName,
-  includeFullJson,
-});
+let exported;
+try {
+  const { createScenarioExport } = await import(`${pathToFileURL(bundlePath).href}?t=${Date.now()}`);
+  exported = createScenarioExport({
+    mode,
+    profile: effectiveProfile,
+    orbitModel,
+    tleSnapshotText,
+    timeSlices,
+    routingAlgorithm,
+    taskText,
+    taskFileName,
+    datasetName,
+    includeFullJson,
+  });
+} finally {
+  await rm(bundlePath, { force: true });
+}
 
 if (!exported.ok) {
   console.error(JSON.stringify(exported.validation, null, 2));

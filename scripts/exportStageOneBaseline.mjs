@@ -55,7 +55,7 @@ const entry = `
       orbit: {
         default_model: config.orbit.model,
         tle_catalog_source: config.orbit.tleCatalog.source,
-        tle_note: "当前为 synthetic-walker TLE 风格数据；后续可替换为 CelesTrak/Space-Track 真实 TLE 数据源。",
+        tle_note: "默认交互场景使用 synthetic-starlink-main-shell；高保真轨道实验可通过 real-tle-sgp4 接入 CelesTrak Starlink 主壳层或规模对照快照。",
         synthetic_eccentricity: config.orbit.tleCatalog.eccentricity,
         synthetic_bstar: config.orbit.tleCatalog.bstar,
       },
@@ -161,7 +161,7 @@ const entry = `
       })),
       simplifications: [
         "第一阶段保留全知真值层，不模拟 INT 报文采集过程。",
-        "轨道模式支持 TLE-SGP4，但当前 TLE 来源仍是 synthetic-walker。",
+        "默认交互模式为 8x8 synthetic-starlink-main-shell；主壳层实验应使用 real-tle-sgp4 与 CelesTrak Starlink 53°/550 km 快照，规模压力实验可使用 72x22 对照快照。",
         "链路预算采用 FSPL/SNR/SINR/容量等网络级公式，不展开完整物理层编码译码。",
         "天气以雨衰等高影响项为主，不引入高保真三维天气场。",
         "电池模型包含 SoC 和充放电效率，不模拟电池老化和热控结构细节。",

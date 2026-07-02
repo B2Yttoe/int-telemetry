@@ -28,6 +28,8 @@ export interface IntHopObservation {
   observedLinkActive: boolean | "";
   observedLinkUtilizationPercent: number;
   observedLinkLatencyMs: number;
+  observedLinkQueueLatencyMs: number;
+  observedLinkPropagationLatencyMs: number;
   observedLinkCapacityMbps: number;
   observedLinkCongestionPercent: number;
 }
@@ -165,6 +167,14 @@ const reportHeaderBytes = 128;
 
 function round(value: number, digits = 4) {
   return Number(value.toFixed(digits));
+}
+
+function estimateQueueLatencyMs(link?: SatelliteLink) {
+  if (!link) return 0;
+  const queuedMb = link.state.queuedTrafficMb;
+  const capacityMbps = link.state.linkBudget?.effective_capacity_mbps ?? link.state.bandwidthMbps;
+  if (!Number.isFinite(queuedMb) || !Number.isFinite(capacityMbps) || queuedMb <= 0 || capacityMbps <= 0) return 0;
+  return round((queuedMb * 8 * 1000) / capacityMbps, 4);
 }
 
 function roleForHop(path: string[], index: number) {
@@ -305,6 +315,8 @@ function buildHopRecord(
   const ingressLink = previousHop ? linkBetween(slice, previousHop, node.id)?.id ?? "" : "";
   const egressLink = nextHop ? linkBetween(slice, node.id, nextHop)?.id ?? "" : "";
   const packetId = `PKT-${path.probeId}`;
+  const totalLatencyMs = observedLink?.state.latencyMs ?? 0;
+  const queueLatencyMs = estimateQueueLatencyMs(observedLink);
 
   return {
     packetId,
@@ -329,7 +341,9 @@ function buildHopRecord(
     observedLinkStatus: observedLink?.state.status ?? "",
     observedLinkActive: observedLink ? observedLink.state.isActive : "",
     observedLinkUtilizationPercent: observedLink?.state.utilizationPercent ?? 0,
-    observedLinkLatencyMs: observedLink?.state.latencyMs ?? 0,
+    observedLinkLatencyMs: totalLatencyMs,
+    observedLinkQueueLatencyMs: queueLatencyMs,
+    observedLinkPropagationLatencyMs: round(Math.max(totalLatencyMs - queueLatencyMs, 0), 4),
     observedLinkCapacityMbps: observedLink?.state.linkBudget?.effective_capacity_mbps ?? observedLink?.state.bandwidthMbps ?? 0,
     observedLinkCongestionPercent: observedLink?.state.congestionPercent ?? 0,
   };

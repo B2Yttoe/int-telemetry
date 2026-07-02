@@ -3,12 +3,12 @@ import type { WalkerNetworkConfig } from "../simulation/types";
 export const walkerNetworkConfig: WalkerNetworkConfig = {
   constellation: {
     walkerType: "star",
-    shellId: "walker-star-shell-01",
+    shellId: "starlink-main-shell-lite-8x8",
     planes: 8,
     satellitesPerPlane: 8,
     phasing: 1,
-    altitudeKm: 1200,
-    inclinationDeg: 86.4,
+    altitudeKm: 550,
+    inclinationDeg: 53,
     earthRadiusKm: 6371,
     gravitationalParameterKm3S2: 398600.4418,
   },
@@ -20,9 +20,9 @@ export const walkerNetworkConfig: WalkerNetworkConfig = {
   orbit: {
     model: "analytic-walker",
     tleCatalog: {
-      source: "synthetic-walker",
+      source: "synthetic-starlink-main-shell",
       noradBaseId: 99000,
-      satelliteNamePrefix: "WALKER-LEO",
+      satelliteNamePrefix: "STARLINK-LIKE",
       cosparYear: 2026,
       cosparLaunchNumber: 1,
       eccentricity: 0.0002,
@@ -36,7 +36,7 @@ export const walkerNetworkConfig: WalkerNetworkConfig = {
   },
   polarRegion: {
     enabled: true,
-    latitudeDeg: 66.5,
+    latitudeDeg: 50,
   },
   earthOcclusion: {
     enabled: true,
