@@ -14,6 +14,7 @@
     "assess:stage1": "node scripts/assessStageOneModel.mjs",
     "verify:stage1": "node scripts/verifyStageOne.mjs",
     "verify:stage1:starlink": "node scripts/verifyStageOneStarlinkFidelity.mjs",
+    "experiment:realism": "node scripts/runExternalRealismExperiment.mjs",
     "baseline:stage1": "node scripts/exportStageOneBaseline.mjs",
     "matrix:stage1": "node scripts/exportStageOneScenarioMatrix.mjs",
     "trace:stage1": "node scripts/exportStageOneBusinessTrace.mjs",

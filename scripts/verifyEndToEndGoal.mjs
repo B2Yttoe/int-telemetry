@@ -95,14 +95,14 @@ function markdownTable(checks) {
 }
 
 const args = process.argv.slice(2);
-const tasks = resolve(argValue(args, "--tasks", "examples/datasets/radar-calibrated-starlink-main-8x8-48-traffic.csv"));
+const tasks = resolve(argValue(args, "--tasks", "examples/datasets/radar-calibrated-starlink-main-47x14-48-traffic.csv"));
 const orbit = argValue(args, "--orbit", "real-tle-sgp4");
 const mode = argValue(args, "--mode", "operational");
 const algorithm = argValue(args, "--algorithm", "path-balance");
-const routing = argValue(args, "--routing", "shortest-path");
+const routing = argValue(args, "--routing", "congestion-aware-shortest-path");
 const slices = argValue(args, "--slices", "");
 const tleSnapshot = resolve(
-  argValue(args, "--tle-snapshot", "data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json"),
+  argValue(args, "--tle-snapshot", "data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-47x14.json"),
 );
 const reportDir = resolve(argValue(args, "--report-dir", "reports/goal"));
 const out = resolve(argValue(args, "--out", `stage2-int/runs/goal-e2e-${nowStamp()}`));

@@ -71,6 +71,7 @@ const simulationModeLabel: Record<SimulationMode, string> = {
 
 const routingAlgorithmLabel: Record<RoutingAlgorithm, string> = {
   "shortest-path": "最短路径",
+  "congestion-aware-shortest-path": "拥塞感知最短路径",
 };
 
 const orbitModelLabel: Record<OrbitModel, string> = {
@@ -1439,6 +1440,13 @@ export default function App() {
               </button>
             </div>
             <div className="mode-switch" aria-label="路由算法">
+              <button
+                type="button"
+                className={routingAlgorithm === "congestion-aware-shortest-path" ? "active" : ""}
+                onClick={() => setRoutingAlgorithm("congestion-aware-shortest-path")}
+              >
+                拥塞感知
+              </button>
               <button
                 type="button"
                 className={routingAlgorithm === "shortest-path" ? "active" : ""}

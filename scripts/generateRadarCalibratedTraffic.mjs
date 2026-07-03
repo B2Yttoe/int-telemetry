@@ -7,6 +7,10 @@ function argValue(args, name, fallback = "") {
   return args[index + 1] ?? fallback;
 }
 
+function hasArg(args, name) {
+  return args.includes(name);
+}
+
 function fail(message) {
   console.error(message);
   process.exit(1);
@@ -32,6 +36,165 @@ function clamp(value, min, max) {
 function normalizeShare(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function optionalNumberArg(args, name) {
+  const raw = argValue(args, name, "");
+  if (raw === "") return Number.NaN;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : Number.NaN;
+}
+
+function average(values) {
+  const clean = values.filter(Number.isFinite);
+  return clean.length ? clean.reduce((sum, value) => sum + value, 0) / clean.length : Number.NaN;
+}
+
+function resample(values, count) {
+  if (!values.length || count <= 0) return [];
+  if (values.length === count) return values;
+  if (count === 1) return [average(values)];
+  const result = [];
+  for (let index = 0; index < count; index += 1) {
+    const position = (index / (count - 1)) * (values.length - 1);
+    const left = Math.floor(position);
+    const right = Math.min(values.length - 1, left + 1);
+    const ratio = position - left;
+    result.push(values[left] * (1 - ratio) + values[right] * ratio);
+  }
+  return result;
+}
+
+function normalize01(values) {
+  const clean = values.filter(Number.isFinite);
+  const min = Math.min(...clean);
+  const max = Math.max(...clean);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return values.map(() => 0.5);
+  if (Math.abs(max - min) < 1e-9) return values.map(() => 0.5);
+  return values.map((value) => (Number.isFinite(value) ? (value - min) / (max - min) : 0.5));
+}
+
+function extractRadarSeriesFromPayload(payload) {
+  const candidates = [];
+  function visit(value, path = []) {
+    if (Array.isArray(value)) {
+      const numericRows = value
+        .map((item, index) => {
+          if (typeof item === "number") return { index, value: item, time: String(index), source_path: path.join(".") };
+          if (item && typeof item === "object") {
+            const keys = Object.keys(item);
+            const valueKey = keys.find((key) => /value|requests|traffic|bytes|count/i.test(key));
+            const timeKey = keys.find((key) => /time|date|timestamp/i.test(key));
+            if (valueKey && Number.isFinite(Number(item[valueKey]))) {
+              return {
+                index,
+                value: Number(item[valueKey]),
+                time: item[timeKey] ?? String(index),
+                source_path: path.join("."),
+              };
+            }
+          }
+          return null;
+        })
+        .filter(Boolean);
+      if (numericRows.length >= 4) candidates.push({ path: path.join("."), rows: numericRows });
+      value.forEach((item, index) => visit(item, [...path, String(index)]));
+    } else if (value && typeof value === "object") {
+      if (Array.isArray(value.timestamps) && Array.isArray(value.values)) {
+        const numericRows = value.values
+          .map((entry, index) => ({
+            index,
+            value: Number(entry),
+            time: value.timestamps[index] ?? String(index),
+            source_path: path.join("."),
+          }))
+          .filter((row) => Number.isFinite(row.value));
+        if (numericRows.length >= 4) candidates.push({ path: path.join("."), rows: numericRows });
+      }
+      for (const [key, child] of Object.entries(value)) visit(child, [...path, key]);
+    }
+  }
+  visit(payload);
+  candidates.sort((a, b) => b.rows.length - a.rows.length);
+  return candidates[0] ?? { path: "", rows: [] };
+}
+
+function selectRadarWindow(rows, count, windowMode) {
+  if (!rows.length || count <= 0) return [];
+  if (rows.length < count || windowMode === "resample") {
+    const values = resample(rows.map((row) => row.value), count);
+    return values.map((value, index) => ({
+      index,
+      value,
+      time: rows[Math.min(rows.length - 1, Math.round((index / Math.max(1, count - 1)) * (rows.length - 1)))]?.time ?? String(index),
+      source_index: index,
+      selection_mode: "resample",
+    }));
+  }
+  if (windowMode === "earliest") return rows.slice(0, count).map((row) => ({ ...row, selection_mode: "earliest" }));
+  const startMatch = /^start:(\d+)$/i.exec(windowMode);
+  if (startMatch) {
+    const start = clamp(Number(startMatch[1]), 0, Math.max(0, rows.length - count));
+    return rows.slice(start, start + count).map((row) => ({ ...row, selection_mode: windowMode }));
+  }
+  return rows.slice(rows.length - count).map((row) => ({ ...row, selection_mode: "latest" }));
+}
+
+function buildRadarDrivenProfile({ profile, radarSeries, radarPath, slices, windowMode, minWeightArg, maxWeightArg, keepAnomalies }) {
+  const baseWeights = (profile.time_series ?? []).map((point) => Number(point.traffic_weight)).filter(Number.isFinite);
+  const minWeight = Number.isFinite(minWeightArg) ? minWeightArg : Math.min(...baseWeights, 0.5);
+  const maxWeight = Number.isFinite(maxWeightArg) ? maxWeightArg : Math.max(...baseWeights, 1.5);
+  if (!(maxWeight > minWeight)) fail("--radar-max-weight must be greater than --radar-min-weight");
+
+  const selectedRows = selectRadarWindow(radarSeries.rows, slices, windowMode);
+  if (selectedRows.length !== slices) {
+    fail(`Radar series could not be aligned to ${slices} slices; selected ${selectedRows.length} points.`);
+  }
+  const normalized = normalize01(selectedRows.map((row) => Number(row.value)));
+  const timeSeries = selectedRows.map((row, index) => {
+    const base = profileTimePoint(profile, index);
+    return {
+      ...base,
+      slice: index,
+      traffic_weight: round(minWeight + normalized[index] * (maxWeight - minWeight), 5),
+      radar_time: row.time,
+      radar_value: round(Number(row.value), 8),
+      radar_normalized: round(normalized[index], 8),
+    };
+  });
+
+  return {
+    profile: {
+      ...profile,
+      data_mode: "external-cloudflare-radar-timeseries-driven",
+      not_raw_cloudflare_export: false,
+      time_series: timeSeries,
+      anomalies: keepAnomalies ? profile.anomalies ?? [] : [],
+    },
+    metadata: {
+      enabled: true,
+      source_path: radarPath,
+      extracted_path: radarSeries.path,
+      original_points: radarSeries.rows.length,
+      selected_points: selectedRows.length,
+      window_mode: selectedRows[0]?.selection_mode ?? windowMode,
+      requested_window_mode: windowMode,
+      min_weight: round(minWeight, 5),
+      max_weight: round(maxWeight, 5),
+      first_selected_time: selectedRows[0]?.time ?? null,
+      last_selected_time: selectedRows.at(-1)?.time ?? null,
+      profile_anomalies_applied: keepAnomalies,
+      note:
+        "Cloudflare Radar AS14593 aggregate values drive per-slice traffic_weight after min-max normalization; comparison is shape-level, not raw Mbps equality.",
+      selected_time_series: timeSeries.map((point) => ({
+        slice: point.slice,
+        radar_time: point.radar_time,
+        radar_value: point.radar_value,
+        radar_normalized: point.radar_normalized,
+        traffic_weight: point.traffic_weight,
+      })),
+    },
+  };
 }
 
 function anomalyMultiplier(profile, slice, regionId, classId) {
@@ -84,12 +247,37 @@ const profilePath = resolve(argValue(args, "--profile", "traffic-calibration/clo
 const outPath = resolve(argValue(args, "--out", "examples/datasets/radar-calibrated-starlink-main-47x14-48-traffic.csv"));
 const metadataOutPath = resolve(argValue(args, "--metadata-out", outPath.replace(/\.csv$/i, ".metadata.json")));
 const slices = Number(argValue(args, "--slices", "48"));
+const radarJsonArg = argValue(args, "--radar-json", "");
+const radarJsonPath = radarJsonArg ? resolve(radarJsonArg) : "";
+const radarWindow = argValue(args, "--radar-window", "latest");
+const radarMinWeightArg = optionalNumberArg(args, "--radar-min-weight");
+const radarMaxWeightArg = optionalNumberArg(args, "--radar-max-weight");
+const keepRadarProfileAnomalies = hasArg(args, "--radar-keep-profile-anomalies");
 
 if (!Number.isFinite(slices) || slices < 1) fail("--slices must be a positive number");
 
 const snapshot = JSON.parse(await readFile(snapshotPath, "utf8"));
 const profile = JSON.parse(await readFile(profilePath, "utf8"));
-const profileErrors = validateProfile(profile);
+let generationProfile = profile;
+let radarCalibration = { enabled: false };
+if (radarJsonPath) {
+  const radarPayload = JSON.parse(await readFile(radarJsonPath, "utf8"));
+  const radarSeries = extractRadarSeriesFromPayload(radarPayload);
+  if (!radarSeries.rows.length) fail(`No numeric Radar time series found in ${radarJsonPath}`);
+  const radarDriven = buildRadarDrivenProfile({
+    profile,
+    radarSeries,
+    radarPath: radarJsonPath,
+    slices,
+    windowMode: radarWindow,
+    minWeightArg: radarMinWeightArg,
+    maxWeightArg: radarMaxWeightArg,
+    keepAnomalies: keepRadarProfileAnomalies,
+  });
+  generationProfile = radarDriven.profile;
+  radarCalibration = radarDriven.metadata;
+}
+const profileErrors = validateProfile(generationProfile);
 if (profileErrors.length > 0) fail(`Invalid calibration profile:\n- ${profileErrors.join("\n- ")}`);
 
 const planes = Number(snapshot.layout?.planes);
@@ -98,9 +286,9 @@ if (!Number.isFinite(planes) || !Number.isFinite(slots) || planes < 1 || slots <
   fail("Snapshot layout must include positive planes and satellites_per_plane");
 }
 
-const regions = profile.regions;
+const regions = generationProfile.regions;
 const regionsById = new Map(regions.map((region) => [region.id, region]));
-const classes = profile.traffic_classes;
+const classes = generationProfile.traffic_classes;
 const rows = [];
 
 function add(row) {
@@ -151,11 +339,11 @@ function routedEndpoints(region, trafficClass, slice, lane) {
   };
 }
 
-if (profile.backbone_flows?.enabled !== false) {
+if (generationProfile.backbone_flows?.enabled !== false) {
   regions.forEach((region, index) => {
     const trafficWeight =
-      profile.time_series.reduce((sum, point) => sum + normalizeShare(point.traffic_weight, 1), 0) /
-      profile.time_series.length;
+      generationProfile.time_series.reduce((sum, point) => sum + normalizeShare(point.traffic_weight, 1), 0) /
+      generationProfile.time_series.length;
     const endpoints = routedEndpoints(region, { id: "backbone" }, 0, index);
     const regionWeight = normalizeShare(region.demand_weight, 1);
     add({
@@ -163,12 +351,12 @@ if (profile.backbone_flows?.enabled !== false) {
       calibration_class_id: "backbone",
       calibration_region_id: region.id,
       start_slice: 0,
-      duration_slices: Math.min(slices, Number(profile.backbone_flows.duration_slices ?? slices)),
+      duration_slices: Math.min(slices, Number(generationProfile.backbone_flows.duration_slices ?? slices)),
       ...endpoints,
-      compute_units: Number(profile.backbone_flows.compute_units ?? 12) * regionWeight,
-      memory_gb: Number(profile.backbone_flows.memory_gb ?? 3),
-      storage_gb: Number(profile.backbone_flows.storage_gb ?? 16),
-      traffic_mbps: Number(profile.backbone_flows.base_mbps ?? 200) * trafficWeight * regionWeight,
+      compute_units: Number(generationProfile.backbone_flows.compute_units ?? 12) * regionWeight,
+      memory_gb: Number(generationProfile.backbone_flows.memory_gb ?? 3),
+      storage_gb: Number(generationProfile.backbone_flows.storage_gb ?? 16),
+      traffic_mbps: Number(generationProfile.backbone_flows.base_mbps ?? 200) * trafficWeight * regionWeight,
       priority: 2,
       task_type: "background",
     });
@@ -176,7 +364,7 @@ if (profile.backbone_flows?.enabled !== false) {
 }
 
 for (let slice = 0; slice < slices; slice += 1) {
-  const point = profileTimePoint(profile, slice);
+  const point = profileTimePoint(generationProfile, slice);
   const trafficWeight = normalizeShare(point.traffic_weight, 1);
 
   regions.forEach((region, regionIndex) => {
@@ -188,7 +376,7 @@ for (let slice = 0; slice < slices; slice += 1) {
       if (mod(slice + regionIndex + phase, interval) !== 0) return;
 
       const share = normalizeShare(point[trafficClass.share_key] ?? trafficClass.share ?? 1, 1);
-      const multiplier = anomalyMultiplier(profile, slice, region.id, trafficClass.id);
+      const multiplier = anomalyMultiplier(generationProfile, slice, region.id, trafficClass.id);
       const endpoints = routedEndpoints(region, trafficClass, slice, regionIndex + classIndex);
       const classScale = 0.72 + share;
       const trafficMbps = Number(trafficClass.base_mbps ?? 100) * trafficWeight * regionWeight * classScale * multiplier;
@@ -210,7 +398,7 @@ for (let slice = 0; slice < slices; slice += 1) {
       });
     });
 
-    const local = profile.local_compute;
+    const local = generationProfile.local_compute;
     if (local && mod(slice + regionIndex, Math.max(1, Number(local.interval_slices ?? 4))) === 0) {
       const anchor = regionAnchor(region, slice, regionIndex + 5);
       add({
@@ -231,7 +419,7 @@ for (let slice = 0; slice < slices; slice += 1) {
   });
 }
 
-for (const anomaly of profile.anomalies ?? []) {
+for (const anomaly of generationProfile.anomalies ?? []) {
   const start = clamp(Number(anomaly.start_slice ?? 0), 0, slices - 1);
   const duration = Math.max(1, Number(anomaly.duration_slices ?? 1));
   const regionIds = Array.isArray(anomaly.regions) ? anomaly.regions : regions.map((region) => region.id);
@@ -258,6 +446,8 @@ for (const anomaly of profile.anomalies ?? []) {
 
 const header = [
   "task_id",
+  "calibration_class_id",
+  "calibration_region_id",
   "time",
   "start_slice",
   "duration_slices",
@@ -279,7 +469,9 @@ const routedTasks = rows.filter((row) => row.source && row.target).length;
 const localTasks = rows.filter((row) => row.node_id).length;
 const totalTrafficMbps = round(rows.reduce((sum, row) => sum + Number(row.traffic_mbps || 0), 0), 2);
 const totalComputeUnits = round(rows.reduce((sum, row) => sum + Number(row.compute_units || 0), 0), 2);
-const timeWeights = Array.from({ length: slices }, (_, slice) => normalizeShare(profileTimePoint(profile, slice).traffic_weight, 1));
+const timeWeights = Array.from({ length: slices }, (_, slice) =>
+  normalizeShare(profileTimePoint(generationProfile, slice).traffic_weight, 1),
+);
 const countBy = (key) =>
   rows.reduce((counts, row) => {
     const value = String(row[key] || "unknown");
@@ -307,14 +499,17 @@ const metadata = {
   calibration_profile: {
     path: profilePath,
     profile_id: profile.profile_id,
-    data_mode: profile.data_mode,
+    data_mode: generationProfile.data_mode,
+    original_data_mode: profile.data_mode,
     not_raw_cloudflare_export: Boolean(profile.not_raw_cloudflare_export),
+    effective_not_raw_cloudflare_export: Boolean(generationProfile.not_raw_cloudflare_export),
     radar_entity: profile.radar_entity ?? null,
     observed_dimensions: profile.observed_dimensions ?? [],
     calibration_mapping: profile.calibration_mapping ?? {},
     quality_model: profile.quality_model ?? null,
     source_references: profile.source_references,
   },
+  radar_calibration: radarCalibration,
   output: {
     csv: outPath,
     metadata: metadataOutPath,
@@ -326,7 +521,7 @@ const metadata = {
     total_compute_units: totalComputeUnits,
     min_time_weight: round(Math.min(...timeWeights), 3),
     max_time_weight: round(Math.max(...timeWeights), 3),
-    anomaly_count: profile.anomalies?.length ?? 0,
+    anomaly_count: generationProfile.anomalies?.length ?? 0,
     task_type_counts: countBy("task_type"),
     calibration_class_counts: countBy("calibration_class_id"),
     calibration_region_counts: countBy("calibration_region_id"),

@@ -95,6 +95,9 @@ function taskLatencyMetrics(route: NetworkSlice["routes"][number] | undefined, t
     return {
       routeLatencyMs: 0,
       queueDelayMs: 0,
+      queueBacklogDelayMs: 0,
+      latencyCapped: false,
+      timeoutMs: 0,
       estimatedEndToEndLatencyMs: 0,
       deliveryRatio: 0,
       deliveryState: "missing",
@@ -106,10 +109,6 @@ function taskLatencyMetrics(route: NetworkSlice["routes"][number] | undefined, t
   const trafficMbps = Math.max(route.trafficMbps, task?.traffic_mbps ?? 0, 0);
   const carriedMbps = Math.max(route.carriedTrafficMbps, 0);
   const serviceMbps = Math.max(carriedMbps, trafficMbps, 1);
-  const queueDelayMs =
-    route.status === "routed" && route.queuedTrafficMb > 0
-      ? (Math.max(route.queuedTrafficMb, 0) * 8 * 1000) / serviceMbps
-      : 0;
   const deliveryRatio =
     trafficMbps > 0
       ? clamp(carriedMbps / trafficMbps, 0, 1)
@@ -117,10 +116,26 @@ function taskLatencyMetrics(route: NetworkSlice["routes"][number] | undefined, t
         ? 0
         : 1;
   const deliveryState = taskDeliveryState(route, task);
+  const fallbackQueueBacklogDelayMs =
+    route.status === "routed" && route.queuedTrafficMb > 0
+      ? (Math.max(route.queuedTrafficMb, 0) * 8 * 1000) / serviceMbps
+      : 0;
+  const timeoutMs = route.timeoutMs || 30000;
+  const queueBacklogDelayMs = route.queueBacklogDelayMs ?? fallbackQueueBacklogDelayMs;
+  const queueDelayMs = Math.min(route.queueDelayMs ?? queueBacklogDelayMs, timeoutMs);
+  const latencyCapped =
+    Boolean(route.latencyCapped) ||
+    queueBacklogDelayMs > queueDelayMs ||
+    deliveryState === "dropped" ||
+    deliveryState === "partial-with-drop" ||
+    deliveryState === "partial-queued";
 
   return {
     routeLatencyMs: route.latencyMs,
     queueDelayMs: round(queueDelayMs, 4),
+    queueBacklogDelayMs: round(queueBacklogDelayMs, 4),
+    latencyCapped,
+    timeoutMs,
     estimatedEndToEndLatencyMs: round(route.latencyMs + queueDelayMs, 4),
     deliveryRatio: round(deliveryRatio, 4),
     deliveryState,
@@ -473,6 +488,9 @@ export function routeSnapshotRows(slices: NetworkSlice[]): ExportRow[] {
         latency_ms: round(route.latencyMs, 4),
         route_latency_ms: round(latency.routeLatencyMs, 4),
         queue_delay_ms: latency.queueDelayMs,
+        queue_backlog_delay_ms: latency.queueBacklogDelayMs,
+        timeout_ms: latency.timeoutMs,
+        latency_capped: latency.latencyCapped,
         estimated_end_to_end_latency_ms: latency.estimatedEndToEndLatencyMs,
         delivery_ratio: latency.deliveryRatio,
         delivery_state: latency.deliveryState,
@@ -554,6 +572,9 @@ export function taskTraceRows(slices: NetworkSlice[], tasks: TaskTrafficRecord[]
         latency_ms: route ? round(route.latencyMs, 4) : 0,
         route_latency_ms: round(latency.routeLatencyMs, 4),
         queue_delay_ms: latency.queueDelayMs,
+        queue_backlog_delay_ms: latency.queueBacklogDelayMs,
+        timeout_ms: latency.timeoutMs,
+        latency_capped: latency.latencyCapped,
         estimated_end_to_end_latency_ms: latency.estimatedEndToEndLatencyMs,
         delivery_ratio: latency.deliveryRatio,
         delivery_state: latency.deliveryState,

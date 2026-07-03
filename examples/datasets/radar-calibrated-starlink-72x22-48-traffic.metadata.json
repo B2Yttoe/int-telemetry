@@ -1,12 +1,12 @@
 {
   "schema": "int-temerity-radar-calibrated-traffic-metadata/v1",
-  "generated_at": "2026-06-26T11:13:48.367Z",
+  "generated_at": "2026-07-03T12:26:15.869Z",
   "generator": "scripts/generateRadarCalibratedTraffic.mjs",
   "snapshot": {
     "path": "E:\\INT-Temerity\\data\\tle-snapshots\\celestrak-starlink-real-walker-72x22.json",
     "source": "celestrak",
     "group": "STARLINK",
-    "fingerprint": "77a8ac15",
+    "fingerprint": "eb0f9db4",
     "selected_count": 1584,
     "planes": 72,
     "satellites_per_plane": 22
@@ -16,11 +16,79 @@
     "profile_id": "cloudflare-radar-inspired-global-48-v1",
     "data_mode": "public-statistical-calibration-template",
     "not_raw_cloudflare_export": true,
+    "radar_entity": {
+      "asn": 14593,
+      "name": "SPACEX-STARLINK",
+      "operator": "Space Exploration Technologies Corporation",
+      "scope": "public ASN-level aggregate observations, not satellite internal telemetry"
+    },
+    "observed_dimensions": [
+      "traffic_trends",
+      "http_requests",
+      "mobile_vs_desktop",
+      "bot_vs_human_html",
+      "content_type_distribution",
+      "api_traffic_share",
+      "internet_outages",
+      "traffic_anomalies",
+      "geographical_distribution",
+      "ip_version_adoption",
+      "http_version_adoption",
+      "dns_transport_and_query_type",
+      "bandwidth_latency_dns_quality",
+      "bgp_prefixes_and_announcements"
+    ],
+    "calibration_mapping": {
+      "traffic_trends": "time_series[].traffic_weight controls per-slice demand intensity.",
+      "mobile_desktop_and_geography": "regions[] distribute demand across constellation planes and slots.",
+      "bot_human_api": "time_series share fields drive human-web, API, automated and DNS/control task classes.",
+      "content_type_distribution": "traffic_classes include video, interactive, background sync, web, API, DNS and automated traffic.",
+      "quality_and_outages": "quality_model and anomalies[] create latency-sensitive windows, slowdown windows, burst windows and reduced-delivery pressure.",
+      "routing_context": "backbone_flows create persistent cross-region traffic resembling public ASN transit/egress pressure."
+    },
+    "quality_model": {
+      "latency_sensitive_classes": [
+        "interactive-realtime",
+        "api",
+        "dns-control"
+      ],
+      "throughput_sensitive_classes": [
+        "video-streaming",
+        "background-sync",
+        "software-update"
+      ],
+      "anomaly_sensitive_classes": [
+        "human-web",
+        "interactive-realtime",
+        "api"
+      ],
+      "notes": "Cloudflare AS14593 quality pages expose bandwidth, latency, DNS response time and jitter dimensions. This profile maps those dimensions into traffic class priorities and anomaly windows rather than claiming raw speed-test traces."
+    },
     "source_references": [
       {
         "name": "Cloudflare Radar overview",
         "url": "https://developers.cloudflare.com/radar/",
         "used_for": "Global Internet traffic, DNS, technology trend, and anonymized aggregate data source context."
+      },
+      {
+        "name": "Cloudflare Radar AS14593 overview",
+        "url": "https://radar.cloudflare.com/as14593",
+        "used_for": "Starlink public ASN identity, traffic trend categories, protocol adoption, HTTP request distribution, DNS and routing context."
+      },
+      {
+        "name": "Cloudflare Radar AS14593 traffic",
+        "url": "https://radar.cloudflare.com/traffic/as14593",
+        "used_for": "Starlink-scoped traffic volume, HTTP traffic, mobile/desktop, bot/human, content type, API traffic, outages, anomalies, and geographic distribution dimensions."
+      },
+      {
+        "name": "Cloudflare Radar AS14593 quality",
+        "url": "https://radar.cloudflare.com/quality/as14593",
+        "used_for": "Starlink-scoped bandwidth, latency, DNS response time, jitter and aggregated speed-test quality context."
+      },
+      {
+        "name": "Cloudflare Radar AS14593 routing",
+        "url": "https://radar.cloudflare.com/routing/as14593",
+        "used_for": "Starlink ASN routing statistics, announced address space, BGP announcements and connectivity context."
       },
       {
         "name": "Cloudflare Radar NetFlows",
@@ -38,13 +106,69 @@
     "csv": "E:\\INT-Temerity\\examples\\datasets\\radar-calibrated-starlink-72x22-48-traffic.csv",
     "metadata": "E:\\INT-Temerity\\examples\\datasets\\radar-calibrated-starlink-72x22-48-traffic.metadata.json",
     "slices": 48,
-    "rows": 755,
-    "routed_tasks": 683,
+    "rows": 1097,
+    "routed_tasks": 1025,
     "local_tasks": 72,
-    "total_traffic_mbps": 112655.77,
-    "total_compute_units": 9815.98,
+    "total_traffic_mbps": 226382.12,
+    "total_compute_units": 13764.39,
     "min_time_weight": 0.5,
     "max_time_weight": 1.48,
-    "anomaly_count": 3
+    "anomaly_count": 5,
+    "task_type_counts": {
+      "background": 294,
+      "mixed": 289,
+      "routing": 216,
+      "compute": 72,
+      "telemetry": 216,
+      "burst": 10
+    },
+    "calibration_class_counts": {
+      "backbone": 6,
+      "human-web": 288,
+      "video-streaming": 144,
+      "automated": 72,
+      "local-compute": 72,
+      "interactive-realtime": 144,
+      "api": 144,
+      "background-sync": 96,
+      "dns-control": 72,
+      "software-update": 48,
+      "anomaly:evening-human-spike": 2,
+      "anomaly:streaming-prime-window": 3,
+      "anomaly:automated-scan-burst": 2,
+      "anomaly:regional-slowdown": 1,
+      "anomaly:software-update-wave": 3
+    },
+    "calibration_region_counts": {
+      "na-east": 183,
+      "na-west": 184,
+      "europe": 184,
+      "east-asia": 183,
+      "south-america": 181,
+      "oceania": 182
+    },
+    "traffic_mbps_by_calibration_class": {
+      "backbone": 1144.86,
+      "human-web": 67562.05,
+      "video-streaming": 75067.73,
+      "automated": 14000.94,
+      "local-compute": 0,
+      "interactive-realtime": 18534.83,
+      "api": 13329.87,
+      "background-sync": 10431.34,
+      "dns-control": 2585.95,
+      "software-update": 15995.29,
+      "anomaly:evening-human-spike": 1449.42,
+      "anomaly:streaming-prime-window": 2376.99,
+      "anomaly:automated-scan-burst": 2023.56,
+      "anomaly:regional-slowdown": 263.34,
+      "anomaly:software-update-wave": 1615.95
+    },
+    "realism_boundary": {
+      "cloudflare_data_scope": "AS14593 public aggregate Radar dimensions",
+      "not_operator_internal_trace": true,
+      "not_satellite_internal_isl_trace": true,
+      "synthetic_mapping": true
+    }
   }
 }

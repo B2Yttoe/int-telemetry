@@ -1,0 +1,518 @@
+{
+  "schema": "int-temerity-radar-calibrated-traffic-metadata/v1",
+  "generated_at": "2026-07-03T13:10:19.574Z",
+  "generator": "scripts/generateRadarCalibratedTraffic.mjs",
+  "snapshot": {
+    "path": "E:\\INT-Temerity\\data\\tle-snapshots\\celestrak-starlink-real-walker-72x22.json",
+    "source": "celestrak",
+    "group": "STARLINK",
+    "fingerprint": "eb0f9db4",
+    "selected_count": 1584,
+    "planes": 72,
+    "satellites_per_plane": 22
+  },
+  "calibration_profile": {
+    "path": "E:\\INT-Temerity\\traffic-calibration\\cloudflare-radar-profile.json",
+    "profile_id": "cloudflare-radar-inspired-global-48-v1",
+    "data_mode": "external-cloudflare-radar-timeseries-driven",
+    "original_data_mode": "public-statistical-calibration-template",
+    "not_raw_cloudflare_export": true,
+    "effective_not_raw_cloudflare_export": false,
+    "radar_entity": {
+      "asn": 14593,
+      "name": "SPACEX-STARLINK",
+      "operator": "Space Exploration Technologies Corporation",
+      "scope": "public ASN-level aggregate observations, not satellite internal telemetry"
+    },
+    "observed_dimensions": [
+      "traffic_trends",
+      "http_requests",
+      "mobile_vs_desktop",
+      "bot_vs_human_html",
+      "content_type_distribution",
+      "api_traffic_share",
+      "internet_outages",
+      "traffic_anomalies",
+      "geographical_distribution",
+      "ip_version_adoption",
+      "http_version_adoption",
+      "dns_transport_and_query_type",
+      "bandwidth_latency_dns_quality",
+      "bgp_prefixes_and_announcements"
+    ],
+    "calibration_mapping": {
+      "traffic_trends": "time_series[].traffic_weight controls per-slice demand intensity.",
+      "mobile_desktop_and_geography": "regions[] distribute demand across constellation planes and slots.",
+      "bot_human_api": "time_series share fields drive human-web, API, automated and DNS/control task classes.",
+      "content_type_distribution": "traffic_classes include video, interactive, background sync, web, API, DNS and automated traffic.",
+      "quality_and_outages": "quality_model and anomalies[] create latency-sensitive windows, slowdown windows, burst windows and reduced-delivery pressure.",
+      "routing_context": "backbone_flows create persistent cross-region traffic resembling public ASN transit/egress pressure."
+    },
+    "quality_model": {
+      "latency_sensitive_classes": [
+        "interactive-realtime",
+        "api",
+        "dns-control"
+      ],
+      "throughput_sensitive_classes": [
+        "video-streaming",
+        "background-sync",
+        "software-update"
+      ],
+      "anomaly_sensitive_classes": [
+        "human-web",
+        "interactive-realtime",
+        "api"
+      ],
+      "notes": "Cloudflare AS14593 quality pages expose bandwidth, latency, DNS response time and jitter dimensions. This profile maps those dimensions into traffic class priorities and anomaly windows rather than claiming raw speed-test traces."
+    },
+    "source_references": [
+      {
+        "name": "Cloudflare Radar overview",
+        "url": "https://developers.cloudflare.com/radar/",
+        "used_for": "Global Internet traffic, DNS, technology trend, and anonymized aggregate data source context."
+      },
+      {
+        "name": "Cloudflare Radar AS14593 overview",
+        "url": "https://radar.cloudflare.com/as14593",
+        "used_for": "Starlink public ASN identity, traffic trend categories, protocol adoption, HTTP request distribution, DNS and routing context."
+      },
+      {
+        "name": "Cloudflare Radar AS14593 traffic",
+        "url": "https://radar.cloudflare.com/traffic/as14593",
+        "used_for": "Starlink-scoped traffic volume, HTTP traffic, mobile/desktop, bot/human, content type, API traffic, outages, anomalies, and geographic distribution dimensions."
+      },
+      {
+        "name": "Cloudflare Radar AS14593 quality",
+        "url": "https://radar.cloudflare.com/quality/as14593",
+        "used_for": "Starlink-scoped bandwidth, latency, DNS response time, jitter and aggregated speed-test quality context."
+      },
+      {
+        "name": "Cloudflare Radar AS14593 routing",
+        "url": "https://radar.cloudflare.com/routing/as14593",
+        "used_for": "Starlink ASN routing statistics, announced address space, BGP announcements and connectivity context."
+      },
+      {
+        "name": "Cloudflare Radar NetFlows",
+        "url": "https://developers.cloudflare.com/radar/investigate/netflows/",
+        "used_for": "Network traffic trend context across Cloudflare edge routers."
+      },
+      {
+        "name": "Cloudflare Radar traffic dashboard",
+        "url": "https://radar.cloudflare.com/traffic",
+        "used_for": "HTTP request class, content/API traffic, bot/human traffic, and traffic mix concepts."
+      }
+    ]
+  },
+  "radar_calibration": {
+    "enabled": true,
+    "source_path": "E:\\INT-Temerity\\reports\\experiment1-external-realism-72x22\\external\\cloudflare-radar\\radar-as14593-traffic.json",
+    "extracted_path": "result.serie_0",
+    "original_points": 168,
+    "selected_points": 48,
+    "window_mode": "latest",
+    "requested_window_mode": "latest",
+    "min_weight": 0.5,
+    "max_weight": 1.5,
+    "first_selected_time": "2026-07-01T11:00:00Z",
+    "last_selected_time": "2026-07-03T10:00:00Z",
+    "profile_anomalies_applied": false,
+    "note": "Cloudflare Radar AS14593 aggregate values drive per-slice traffic_weight after min-max normalization; comparison is shape-level, not raw Mbps equality.",
+    "selected_time_series": [
+      {
+        "slice": 0,
+        "radar_time": "2026-07-01T11:00:00Z",
+        "radar_value": 0.728867,
+        "radar_normalized": 0.40425911,
+        "traffic_weight": 0.90426
+      },
+      {
+        "slice": 1,
+        "radar_time": "2026-07-01T12:00:00Z",
+        "radar_value": 0.802064,
+        "radar_normalized": 0.56508957,
+        "traffic_weight": 1.06509
+      },
+      {
+        "slice": 2,
+        "radar_time": "2026-07-01T13:00:00Z",
+        "radar_value": 0.85556,
+        "radar_normalized": 0.68263245,
+        "traffic_weight": 1.18263
+      },
+      {
+        "slice": 3,
+        "radar_time": "2026-07-01T14:00:00Z",
+        "radar_value": 0.897037,
+        "radar_normalized": 0.77376686,
+        "traffic_weight": 1.27377
+      },
+      {
+        "slice": 4,
+        "radar_time": "2026-07-01T15:00:00Z",
+        "radar_value": 0.894549,
+        "radar_normalized": 0.76830016,
+        "traffic_weight": 1.2683
+      },
+      {
+        "slice": 5,
+        "radar_time": "2026-07-01T16:00:00Z",
+        "radar_value": 0.956904,
+        "radar_normalized": 0.90530828,
+        "traffic_weight": 1.40531
+      },
+      {
+        "slice": 6,
+        "radar_time": "2026-07-01T17:00:00Z",
+        "radar_value": 0.991055,
+        "radar_normalized": 0.9803458,
+        "traffic_weight": 1.48035
+      },
+      {
+        "slice": 7,
+        "radar_time": "2026-07-01T18:00:00Z",
+        "radar_value": 0.915583,
+        "radar_normalized": 0.81451664,
+        "traffic_weight": 1.31452
+      },
+      {
+        "slice": 8,
+        "radar_time": "2026-07-01T19:00:00Z",
+        "radar_value": 0.918448,
+        "radar_normalized": 0.8208117,
+        "traffic_weight": 1.32081
+      },
+      {
+        "slice": 9,
+        "radar_time": "2026-07-01T20:00:00Z",
+        "radar_value": 0.9698,
+        "radar_normalized": 0.93364373,
+        "traffic_weight": 1.43364
+      },
+      {
+        "slice": 10,
+        "radar_time": "2026-07-01T21:00:00Z",
+        "radar_value": 0.970943,
+        "radar_normalized": 0.93615516,
+        "traffic_weight": 1.43616
+      },
+      {
+        "slice": 11,
+        "radar_time": "2026-07-01T22:00:00Z",
+        "radar_value": 0.930534,
+        "radar_normalized": 0.84736739,
+        "traffic_weight": 1.34737
+      },
+      {
+        "slice": 12,
+        "radar_time": "2026-07-01T23:00:00Z",
+        "radar_value": 0.847552,
+        "radar_normalized": 0.66503706,
+        "traffic_weight": 1.16504
+      },
+      {
+        "slice": 13,
+        "radar_time": "2026-07-02T00:00:00Z",
+        "radar_value": 0.836048,
+        "radar_normalized": 0.63976015,
+        "traffic_weight": 1.13976
+      },
+      {
+        "slice": 14,
+        "radar_time": "2026-07-02T01:00:00Z",
+        "radar_value": 0.829303,
+        "radar_normalized": 0.62493985,
+        "traffic_weight": 1.12494
+      },
+      {
+        "slice": 15,
+        "radar_time": "2026-07-02T02:00:00Z",
+        "radar_value": 0.791649,
+        "radar_normalized": 0.54220545,
+        "traffic_weight": 1.04221
+      },
+      {
+        "slice": 16,
+        "radar_time": "2026-07-02T03:00:00Z",
+        "radar_value": 0.724264,
+        "radar_normalized": 0.39414527,
+        "traffic_weight": 0.89415
+      },
+      {
+        "slice": 17,
+        "radar_time": "2026-07-02T04:00:00Z",
+        "radar_value": 0.655064,
+        "radar_normalized": 0.24209712,
+        "traffic_weight": 0.7421
+      },
+      {
+        "slice": 18,
+        "radar_time": "2026-07-02T05:00:00Z",
+        "radar_value": 0.608426,
+        "radar_normalized": 0.13962282,
+        "traffic_weight": 0.63962
+      },
+      {
+        "slice": 19,
+        "radar_time": "2026-07-02T06:00:00Z",
+        "radar_value": 0.562835,
+        "radar_normalized": 0.03944902,
+        "traffic_weight": 0.53945
+      },
+      {
+        "slice": 20,
+        "radar_time": "2026-07-02T07:00:00Z",
+        "radar_value": 0.554327,
+        "radar_normalized": 0.02075501,
+        "traffic_weight": 0.52076
+      },
+      {
+        "slice": 21,
+        "radar_time": "2026-07-02T08:00:00Z",
+        "radar_value": 0.561692,
+        "radar_normalized": 0.03693759,
+        "traffic_weight": 0.53694
+      },
+      {
+        "slice": 22,
+        "radar_time": "2026-07-02T09:00:00Z",
+        "radar_value": 0.592116,
+        "radar_normalized": 0.10378604,
+        "traffic_weight": 0.60379
+      },
+      {
+        "slice": 23,
+        "radar_time": "2026-07-02T10:00:00Z",
+        "radar_value": 0.658259,
+        "radar_normalized": 0.24911726,
+        "traffic_weight": 0.74912
+      },
+      {
+        "slice": 24,
+        "radar_time": "2026-07-02T11:00:00Z",
+        "radar_value": 0.726521,
+        "radar_normalized": 0.39910441,
+        "traffic_weight": 0.8991
+      },
+      {
+        "slice": 25,
+        "radar_time": "2026-07-02T12:00:00Z",
+        "radar_value": 0.805713,
+        "radar_normalized": 0.57310725,
+        "traffic_weight": 1.07311
+      },
+      {
+        "slice": 26,
+        "radar_time": "2026-07-02T13:00:00Z",
+        "radar_value": 0.858857,
+        "radar_normalized": 0.68987671,
+        "traffic_weight": 1.18988
+      },
+      {
+        "slice": 27,
+        "radar_time": "2026-07-02T14:00:00Z",
+        "radar_value": 0.882292,
+        "radar_normalized": 0.74136874,
+        "traffic_weight": 1.24137
+      },
+      {
+        "slice": 28,
+        "radar_time": "2026-07-02T15:00:00Z",
+        "radar_value": 0.884113,
+        "radar_normalized": 0.74536989,
+        "traffic_weight": 1.24537
+      },
+      {
+        "slice": 29,
+        "radar_time": "2026-07-02T16:00:00Z",
+        "radar_value": 0.872332,
+        "radar_normalized": 0.71948435,
+        "traffic_weight": 1.21948
+      },
+      {
+        "slice": 30,
+        "radar_time": "2026-07-02T17:00:00Z",
+        "radar_value": 0.860416,
+        "radar_normalized": 0.69330219,
+        "traffic_weight": 1.1933
+      },
+      {
+        "slice": 31,
+        "radar_time": "2026-07-02T18:00:00Z",
+        "radar_value": 0.882409,
+        "radar_normalized": 0.74162582,
+        "traffic_weight": 1.24163
+      },
+      {
+        "slice": 32,
+        "radar_time": "2026-07-02T19:00:00Z",
+        "radar_value": 1,
+        "radar_normalized": 1,
+        "traffic_weight": 1.5
+      },
+      {
+        "slice": 33,
+        "radar_time": "2026-07-02T20:00:00Z",
+        "radar_value": 0.995673,
+        "radar_normalized": 0.9904926,
+        "traffic_weight": 1.49049
+      },
+      {
+        "slice": 34,
+        "radar_time": "2026-07-02T21:00:00Z",
+        "radar_value": 0.902741,
+        "radar_normalized": 0.78629985,
+        "traffic_weight": 1.2863
+      },
+      {
+        "slice": 35,
+        "radar_time": "2026-07-02T22:00:00Z",
+        "radar_value": 0.886679,
+        "radar_normalized": 0.75100798,
+        "traffic_weight": 1.25101
+      },
+      {
+        "slice": 36,
+        "radar_time": "2026-07-02T23:00:00Z",
+        "radar_value": 0.895635,
+        "radar_normalized": 0.77068635,
+        "traffic_weight": 1.27069
+      },
+      {
+        "slice": 37,
+        "radar_time": "2026-07-03T00:00:00Z",
+        "radar_value": 0.893317,
+        "radar_normalized": 0.76559317,
+        "traffic_weight": 1.26559
+      },
+      {
+        "slice": 38,
+        "radar_time": "2026-07-03T01:00:00Z",
+        "radar_value": 0.83751,
+        "radar_normalized": 0.6429725,
+        "traffic_weight": 1.14297
+      },
+      {
+        "slice": 39,
+        "radar_time": "2026-07-03T02:00:00Z",
+        "radar_value": 0.775736,
+        "radar_normalized": 0.50724096,
+        "traffic_weight": 1.00724
+      },
+      {
+        "slice": 40,
+        "radar_time": "2026-07-03T03:00:00Z",
+        "radar_value": 0.74461,
+        "radar_normalized": 0.43885006,
+        "traffic_weight": 0.93885
+      },
+      {
+        "slice": 41,
+        "radar_time": "2026-07-03T04:00:00Z",
+        "radar_value": 0.666632,
+        "radar_normalized": 0.26751465,
+        "traffic_weight": 0.76751
+      },
+      {
+        "slice": 42,
+        "radar_time": "2026-07-03T05:00:00Z",
+        "radar_value": 0.603244,
+        "radar_normalized": 0.12823679,
+        "traffic_weight": 0.62824
+      },
+      {
+        "slice": 43,
+        "radar_time": "2026-07-03T06:00:00Z",
+        "radar_value": 0.560396,
+        "radar_normalized": 0.03408999,
+        "traffic_weight": 0.53409
+      },
+      {
+        "slice": 44,
+        "radar_time": "2026-07-03T07:00:00Z",
+        "radar_value": 0.544881,
+        "radar_normalized": 0,
+        "traffic_weight": 0.5
+      },
+      {
+        "slice": 45,
+        "radar_time": "2026-07-03T08:00:00Z",
+        "radar_value": 0.546411,
+        "radar_normalized": 0.00336176,
+        "traffic_weight": 0.50336
+      },
+      {
+        "slice": 46,
+        "radar_time": "2026-07-03T09:00:00Z",
+        "radar_value": 0.572043,
+        "radar_normalized": 0.05968109,
+        "traffic_weight": 0.55968
+      },
+      {
+        "slice": 47,
+        "radar_time": "2026-07-03T10:00:00Z",
+        "radar_value": 0.626898,
+        "radar_normalized": 0.18021001,
+        "traffic_weight": 0.68021
+      }
+    ]
+  },
+  "output": {
+    "csv": "E:\\INT-Temerity\\examples\\datasets\\radar-fitted-starlink-72x22-48-traffic.csv",
+    "metadata": "E:\\INT-Temerity\\examples\\datasets\\radar-fitted-starlink-72x22-48-traffic.metadata.json",
+    "slices": 48,
+    "rows": 1086,
+    "routed_tasks": 1014,
+    "local_tasks": 72,
+    "total_traffic_mbps": 238858.83,
+    "total_compute_units": 14722.04,
+    "min_time_weight": 0.5,
+    "max_time_weight": 1.5,
+    "anomaly_count": 0,
+    "task_type_counts": {
+      "background": 294,
+      "mixed": 288,
+      "routing": 216,
+      "compute": 72,
+      "telemetry": 216
+    },
+    "calibration_class_counts": {
+      "backbone": 6,
+      "human-web": 288,
+      "video-streaming": 144,
+      "automated": 72,
+      "local-compute": 72,
+      "interactive-realtime": 144,
+      "api": 144,
+      "background-sync": 96,
+      "dns-control": 72,
+      "software-update": 48
+    },
+    "calibration_region_counts": {
+      "na-east": 181,
+      "na-west": 181,
+      "europe": 181,
+      "east-asia": 181,
+      "south-america": 181,
+      "oceania": 181
+    },
+    "traffic_mbps_by_calibration_class": {
+      "backbone": 1295.3,
+      "human-web": 74859.23,
+      "video-streaming": 79268.4,
+      "automated": 15138.56,
+      "local-compute": 0,
+      "interactive-realtime": 20915,
+      "api": 15060.72,
+      "background-sync": 11776.19,
+      "dns-control": 2952.85,
+      "software-update": 17592.58
+    },
+    "realism_boundary": {
+      "cloudflare_data_scope": "AS14593 public aggregate Radar dimensions",
+      "not_operator_internal_trace": true,
+      "not_satellite_internal_isl_trace": true,
+      "synthetic_mapping": true
+    }
+  }
+}

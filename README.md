@@ -97,7 +97,7 @@ LEO 卫星网络具有强动态性：
 | 合成 TLE + SGP4 | 保持 Walker 结构，同时使用 SGP4 传播位置。 |
 | 真实 TLE + SGP4 | 接入 CelesTrak GP/OMM 快照，使用真实公开轨道数据传播。 |
 
-当前默认交互星座已经调整为 Starlink 主壳层近似参数：`8x8` 轻量 Walker-Star、约 `550 km` 高度、约 `53°` 倾角，适合仪表盘实时观察和常规验收。仪表盘的轨道模型切换中也提供了 `真实 TLE + SGP4`，会加载内置 CelesTrak Starlink 主壳层 `8x8` 快照进行可视化。需要更接近真实规模时，使用 `real-tle-sgp4` 加载 CelesTrak Starlink 快照；项目内置主壳层 `8x8`、主壳层 `47x14` 和最大规模对照 `72x22` 快照。
+当前默认交互星座仍保留 `8x8` 轻量 Walker-Star，适合仪表盘实时观察和快速验收；正式实验不再围绕 8x8 展开，而是默认使用 CelesTrak Starlink 主壳层 `72x22` 快照。需要更大规模压力对照时，可继续使用 `72x22` 快照。
 
 当前真实 TLE 快照示例位于：
 
@@ -109,8 +109,7 @@ data/tle-snapshots/
 
 ```text
 celestrak-starlink-main-550km-53deg-walker-8x8.json      # 53°/550 km 主壳层轻量可视化
-celestrak-starlink-main-550km-53deg-walker-47x14.json    # 53°/550 km 主壳层较大规模数据集
-celestrak-starlink-real-walker-72x22.json                # 当前公开快照最大规模对照，约 43°/490 km
+celestrak-starlink-real-walker-72x22.json                # 当前公开 TLE 72x22 完整规模快照，约 43°/490 km
 ```
 
 ### 3.2 节点状态
@@ -181,9 +180,9 @@ examples/datasets/
 stage1-standard-traffic.csv
 stage1-ml-48-traffic.csv
 radar-calibrated-starlink-main-8x8-48-traffic.csv
-radar-calibrated-starlink-main-47x14-48-traffic.csv
+radar-calibrated-starlink-72x22-48-traffic.csv
 real-starlink-main-8x8-ml-48-traffic.csv
-real-starlink-main-47x14-ml-48-traffic.csv
+real-starlink-72x22-ml-48-traffic.csv
 ```
 
 业务数据集用于描述在某个时间片生成的任务流量，包括源节点、目的节点、带宽、计算需求、持续时间、优先级等。模型会根据路由和链路状态计算这些业务对卫星网络的影响。
@@ -240,7 +239,7 @@ stage2-int/
 运行示例：
 
 ```bash
-npm run int:experiment -- --tasks examples/datasets/radar-calibrated-starlink-main-8x8-48-traffic.csv --out stage2-int/runs/int-mc-main-8x8-smoke --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json --mode operational --algorithm int-mc --int-mc-sampling-rate 0.25 --int-mc-rank 5 --int-mc-window 12
+npm run int:experiment -- --tasks examples/datasets/radar-calibrated-starlink-72x22-48-traffic.csv --out stage2-int/runs/int-mc-main-72x22 --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-real-walker-72x22.json --mode operational --algorithm int-mc --int-mc-sampling-rate 0.25 --int-mc-rank 5 --int-mc-window 12
 ```
 
 关键产物：
@@ -384,7 +383,7 @@ npm run verify:stage1:starlink
 用途：
 
 - 检查默认轻量星座是否采用 Starlink 主壳层近似高度/倾角；
-- 检查 CelesTrak Starlink 主壳层 `8x8`、主壳层 `47x14` 和最大规模对照 `72x22` 真实 TLE 快照是否可用；
+- 检查 CelesTrak Starlink 主壳层 `8x8`、主壳层 `72x22` 和最大规模对照 `72x22` 真实 TLE 快照是否可用；
 - 实际导出 real-tle-sgp4 的三类小时间片真值，证明第一阶段既能对齐 `53°/550 km` 主壳层，也能运行更大规模真实公开快照。
 
 ### 7.2 总体验收
@@ -400,12 +399,12 @@ npm run verify:goal
 - 检查 Ground OAM 重构；
 - 检查关键产物是否存在。
 
-当前默认输入为 Starlink 主壳层 `8x8` 真实 TLE 快照和 Radar 校准业务数据集。调试时可以追加 `--slices <N>` 缩短实验时间片；正式结论建议使用完整 48 时间片。
+当前正式实验默认输入为 Starlink 主壳层 `72x22` 真实 TLE 快照和 Radar 校准业务数据集。调试时可以追加 `--slices <N>` 缩短实验时间片；8x8 只建议作为 smoke test。
 
 ### 7.3 校验业务数据集
 
 ```bash
-npm run validate:dataset -- --tasks examples/datasets/radar-calibrated-starlink-main-8x8-48-traffic.csv --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json
+npm run validate:dataset -- --tasks examples/datasets/radar-calibrated-starlink-72x22-48-traffic.csv --tle-snapshot data/tle-snapshots/celestrak-starlink-real-walker-72x22.json
 ```
 
 用途：
@@ -418,7 +417,7 @@ npm run validate:dataset -- --tasks examples/datasets/radar-calibrated-starlink-
 ### 7.4 导出第一阶段真值场景
 
 ```bash
-npm run export:scenario -- --tasks examples/datasets/radar-calibrated-starlink-main-8x8-48-traffic.csv --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json --mode operational --out exports/radar-calibrated-starlink-main-8x8-48
+npm run export:scenario -- --tasks examples/datasets/radar-calibrated-starlink-72x22-48-traffic.csv --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-real-walker-72x22.json --mode operational --out exports/radar-calibrated-starlink-72x22-48
 ```
 
 输出通常包括：
@@ -435,7 +434,7 @@ manifest.json
 ### 7.5 运行 INT 实验
 
 ```bash
-npm run int:experiment -- --tasks examples/datasets/radar-calibrated-starlink-main-8x8-48-traffic.csv --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json --mode operational --algorithm path-balance --out stage2-int/runs/radar-calibrated-main-8x8
+npm run int:experiment -- --tasks examples/datasets/radar-calibrated-starlink-72x22-48-traffic.csv --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-real-walker-72x22.json --mode operational --algorithm path-balance --out stage2-int/runs/radar-calibrated-72x22
 ```
 
 输出通常包括：
@@ -460,13 +459,13 @@ npm run tle:fetch
 生成 Starlink `53°/550 km` 主壳层快照时建议显式指定目标壳层：
 
 ```bash
-npm run tle:fetch -- --planes 47 --satellites-per-plane 14 --target-inclination 53 --target-altitude 550 --out data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-47x14.json
+npm run tle:fetch -- --planes 72 --satellites-per-plane 22 --out data/tle-snapshots/celestrak-starlink-real-walker-72x22.json
 ```
 
 校验快照：
 
 ```bash
-npm run tle:verify -- --snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json
+npm run tle:verify -- --snapshot data/tle-snapshots/celestrak-starlink-real-walker-72x22.json
 ```
 
 ### 7.7 生成业务数据集
@@ -491,16 +490,34 @@ npm run dataset:stage1:realistic
 
 默认行为：
 
-- 使用 `celestrak-starlink-main-550km-53deg-walker-47x14.json` 作为真实公开 TLE-SGP4 快照；
+- 使用 `celestrak-starlink-real-walker-72x22.json` 作为真实公开 TLE-SGP4 快照；
 - 使用 `traffic-calibration/cloudflare-radar-profile.json` 生成公开统计特征校准业务；
 - 导出 `nodes.csv`、`links.csv`、`routes.csv`、`metrics.csv` 和数据集 manifest；
-- 输出目录默认为 `exports/stage1-realistic-main-47x14-48/`。
+- 输出目录默认为 `exports/stage1-realistic-72x22-48/`。
 
 快速烟测可以使用更小的 8x8 快照：
 
 ```bash
 npm run dataset:stage1:realistic -- --snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json --slices 4 --out exports/stage1-realistic-smoke-main-8x8-4
 ```
+
+### 7.9 实验 1：基于外部公开数据的仿真真实性验证
+
+该实验不再使用内部一致性评分来证明模型“自洽”，而是把第一阶段模型输出与外部公开数据进行对照。默认对照源包括 CelesTrak Starlink GP/TLE、Cloudflare Radar AS14593 业务数据入口、RIPE Atlas AS14593 Starlink 探针公开测量。实验会客观展示轨道、星座规模、业务流量和网络性能四类对照结果；如果缺少 Cloudflare Radar token 或外部 CSV，也会在报告中明确标注“业务流量强外部验证未完成”。网络性能对照采用用户侧 RTT 口径：根据 RIPE 探针位置、模型卫星几何和区域网关/PoP 抽象估计 `用户-卫星-网关` RTT，再与 RIPE Atlas ping 比较；内部任务路由时延仍保留为星座压力指标，不直接拿来验证公开 ping。
+
+```powershell
+npm run generate:radar-traffic -- --snapshot data\tle-snapshots\celestrak-starlink-real-walker-72x22.json --profile traffic-calibration\cloudflare-radar-profile.json --radar-json reports\_archive\experiment1-pre-final-20260703-211932\experiment1-external-realism-72x22\external\cloudflare-radar\radar-as14593-traffic.json --radar-window latest --out reports\experiment1-satellite-data-authenticity\input\radar-fitted-traffic.csv --metadata-out reports\experiment1-satellite-data-authenticity\input\radar-fitted-traffic.metadata.json --slices 48
+
+npm run experiment:realism -- --out reports\experiment1-satellite-data-authenticity --snapshot data\tle-snapshots\celestrak-starlink-real-walker-72x22.json --tasks reports\experiment1-satellite-data-authenticity\input\radar-fitted-traffic.csv --slices 48 --radar-json reports\_archive\experiment1-pre-final-20260703-211932\experiment1-external-realism-72x22\external\cloudflare-radar\radar-as14593-traffic.json --radar-window latest --ripe-max-probes 16 --ripe-hours 4
+```
+
+正式实验使用 `72x22` 真实 TLE-SGP4 壳层快照和 Radar 原始时序驱动业务输入，输出目录：
+
+```text
+reports/experiment1-satellite-data-authenticity/
+```
+
+其中 `experiment1-research-report.html/md` 是研究级总结报告，`external-realism-report.html/json` 是自动外部对照报告；`user-facing-rtt-comparison.csv` 记录每个 RIPE 探针样本对应的时间片、接入卫星、区域网关、星间回退路径和模型用户侧 RTT。详细说明见 `project-docs/EXPERIMENT_1_SIMULATION_FIDELITY.md`。
 
 ## 8. 仪表盘功能
 
@@ -548,11 +565,17 @@ npm run dataset:stage1:realistic -- --snapshot data/tle-snapshots/celestrak-star
 
 ## 10. 数据真实性边界
 
-当前项目可以接入真实公开 TLE 快照，并使用 SGP4 传播轨道位置。这增强了轨道层真实性。
+当前项目可以接入真实公开 TLE 快照，并使用 SGP4 传播轨道位置；实验 1 进一步把模型输出与外部公开数据对照，而不是只做内部一致性验证。当前可用的外部对照包括：
+
+- CelesTrak / Space-Track 类公开 TLE/GP 目录：用于验证轨道、壳层和星座分布；
+- Cloudflare Radar AS14593：用于验证 Starlink ASN 侧公开业务流量趋势，需 API token 或用户导出 CSV；
+- RIPE Atlas AS14593 探针：用于验证 Starlink 接入侧公开 RTT/丢包量级，当前项目通过用户侧 RTT 估计与其对照，不把内部星间任务路由时延直接等同于 RIPE ping；
+- 公开测量论文和报告：用于解释 Starlink 性能范围和外部观测边界。
 
 但是需要明确：
 
-- 业务流量通常仍是由公开统计特征或示例数据校准生成，不等同于真实运营商内部流量；
+- 如果没有 Cloudflare Radar API token 或外部 CSV，业务流量只能称为公开统计特征校准，不等同于真实运营商内部流量；
+- 公开世界基本拿不到逐星 CPU、电池、队列和每条 ISL 的真实运营状态，这些字段是外部轨道/业务/性能约束后的仿真真值；
 - 链路预算和能耗模型是中高层抽象，不是硬件级射频链路仿真；
 - INT 过程是协议机制和状态采集逻辑复现，不是 P4/Tofino/ns-3 级逐包实现；
 - Ground OAM 的重构结果需要和第一阶段真值区分。
@@ -609,7 +632,7 @@ stage2-int/predicted-contact-plan-evaluation.json
 一次标准命令示例：
 
 ```powershell
-npm run int:experiment -- --tasks examples/datasets/radar-calibrated-starlink-main-8x8-48-traffic.csv --out stage2-int/runs/int-mc-contact-plan-main-8x8-smoke --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json --mode operational --algorithm int-mc
+npm run int:experiment -- --tasks examples/datasets/radar-calibrated-starlink-72x22-48-traffic.csv --out stage2-int/runs/int-mc-contact-plan-72x22 --orbit real-tle-sgp4 --tle-snapshot data/tle-snapshots/celestrak-starlink-real-walker-72x22.json --mode operational --algorithm int-mc
 ```
 
 在最新 smoke run 中，48 个时间片下生成 5760 个链路样本，预测 contact plan 的 precision/recall/accuracy 均为 1，INT-MC 对 4971 个 active 链路样本完成 100% active-link completion，其中 3862 个来自直接 INT 观测，1109 个由矩阵补全推断得到。

@@ -129,13 +129,13 @@ function markdown(manifest) {
 
 const args = process.argv.slice(2);
 const snapshotPath = resolve(
-  argValue(args, "--snapshot", "data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-47x14.json"),
+  argValue(args, "--snapshot", "data/tle-snapshots/celestrak-starlink-real-walker-72x22.json"),
 );
 const calibrationProfilePath = resolve(
   argValue(args, "--calibration-profile", "traffic-calibration/cloudflare-radar-profile.json"),
 );
 const slices = Number(argValue(args, "--slices", "48"));
-const outRoot = resolve(argValue(args, "--out", "exports/stage1-realistic-main-47x14-48"));
+const outRoot = resolve(argValue(args, "--out", "exports/stage1-realistic-72x22-48"));
 const trafficCsvPath = resolve(argValue(args, "--traffic-out", join(outRoot, "traffic", "tasks.csv")));
 const trafficMetadataPath = resolve(
   argValue(args, "--traffic-metadata-out", join(outRoot, "traffic", "metadata.json")),
@@ -182,7 +182,7 @@ const exportArgs = [
   "--mode",
   "operational",
   "--routing",
-  "shortest-path",
+  "congestion-aware-shortest-path",
   "--slices",
   String(slices),
   "--out",

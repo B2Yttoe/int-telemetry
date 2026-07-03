@@ -127,7 +127,7 @@ export const walkerNetworkConfig: WalkerNetworkConfig = {
     cacheStorageGbPerBufferedGb: 1,
   },
   routing: {
-    algorithm: "shortest-path",
+    algorithm: "congestion-aware-shortest-path",
   },
   trafficModel: {
     normalFlowCount: 24,
@@ -146,6 +146,8 @@ export const walkerNetworkConfig: WalkerNetworkConfig = {
     queueDepthPerQueuedMb: 0.18,
     queueCarryoverRatio: 0.65,
     linkQueueCapacityMb: 16384,
+    maxRouteQueueDelayMs: 30000,
+    taskTimeoutMs: 30000,
     cacheCapacityMb: 8192,
     telemetryGenerationMbPerSlice: 18,
     telemetryCpuMbPerPercent: 0.03,
@@ -504,7 +506,7 @@ export const walkerNetworkConfig: WalkerNetworkConfig = {
   linkStateDefaults: {
     status: "up",
     bandwidthMbps: 2500,
-    latencyMs: 12,
+    latencyMs: 0.25,
     utilizationPercent: 36,
     demandTrafficMbps: 0,
     carriedTrafficMbps: 0,

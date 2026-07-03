@@ -2,6 +2,7 @@ import type {
   AntennaRole,
   InterPlaneDirection,
   LinkKind,
+  LinkPointingState,
   LinkRestrictionReason,
   LinkStatus,
   NetworkSlice,
@@ -18,6 +19,7 @@ import type {
   SimulationInput,
   NodeTaskLoad,
   RoutedTaskPath,
+  TleSatelliteRecord,
   Vector3Km,
   WalkerNetworkConfig,
 } from "./types";
@@ -115,6 +117,22 @@ function rotateZ(vector: Vector3Km, angleRad: number): Vector3Km {
     y: vector.x * sin + vector.y * cos,
     z: vector.z,
   };
+}
+
+function rotateX(vector: Vector3Km, angleRad: number): Vector3Km {
+  const cos = Math.cos(angleRad);
+  const sin = Math.sin(angleRad);
+  return {
+    x: vector.x,
+    y: vector.y * cos - vector.z * sin,
+    z: vector.y * sin + vector.z * cos,
+  };
+}
+
+function orbitalPlanePhaseDeg(node: SatelliteNode) {
+  const afterRaan = rotateZ(node.timeState.eci, -toRadians(node.orbit.raanDeg));
+  const orbitalFrame = rotateX(afterRaan, -toRadians(node.orbit.inclinationDeg));
+  return normalizeDegrees(toDegrees(Math.atan2(orbitalFrame.y, orbitalFrame.x)));
 }
 
 function distanceKm(a: Vector3Km, b: Vector3Km) {
@@ -277,6 +295,7 @@ function islLinkBudget(
   targetRole: AntennaRole,
   config: WalkerNetworkConfig,
   pointingHistory?: AntennaPointingHistory,
+  fixedPointing = false,
 ) {
   const sourceAntenna = antennaByRole(source, sourceRole);
   const targetAntenna = antennaByRole(target, targetRole);
@@ -298,7 +317,14 @@ function islLinkBudget(
     config,
     pointingHistory,
   );
-  const pointingState = combinePointingEndpoints(sourcePointing, targetPointing);
+  const combinedPointingState = combinePointingEndpoints(sourcePointing, targetPointing);
+  const pointingState: LinkPointingState = fixedPointing
+    ? {
+        ...combinedPointingState,
+        switching_delay_s: 0,
+        availability_factor: 1,
+      }
+    : combinedPointingState;
   const totalPointingLossDb = config.linkBudget.isl.pointingLossDb + pointingState.dynamic_pointing_loss_db;
   const radialVelocityKmS = relativeRadialVelocityKmS(
     source.timeState.eci,
@@ -519,8 +545,41 @@ function configForSimulation(config: WalkerNetworkConfig, input: SimulationInput
   };
 }
 
-function realTleRecordsFromInput(input: SimulationInput) {
-  return input.tleCatalogSnapshot?.satellites;
+function tlePhaseAtReference(record: TleSatelliteRecord, referenceIso: string) {
+  const epochMs = Date.parse(record.epoch);
+  const referenceMs = Date.parse(referenceIso);
+  if (!Number.isFinite(epochMs) || !Number.isFinite(referenceMs)) {
+    return normalizeDegrees(record.argument_of_perigee + record.mean_anomaly);
+  }
+  const deltaDays = (referenceMs - epochMs) / 86400000;
+  return normalizeDegrees(record.argument_of_perigee + record.mean_anomaly + record.mean_motion * 360 * deltaDays);
+}
+
+function realTleRecordsFromInput(input: SimulationInput, config: WalkerNetworkConfig) {
+  const records = input.tleCatalogSnapshot?.satellites;
+  if (!records) return undefined;
+
+  const byPlane = new Map<number, TleSatelliteRecord[]>();
+  records.forEach((record) => {
+    byPlane.set(record.plane_id, [...(byPlane.get(record.plane_id) ?? []), record]);
+  });
+
+  return [...byPlane.entries()]
+    .sort(([left], [right]) => left - right)
+    .flatMap(([plane, planeRecords]) =>
+      [...planeRecords]
+        .sort(
+          (left, right) =>
+            tlePhaseAtReference(left, config.time.epochIso) - tlePhaseAtReference(right, config.time.epochIso) ||
+            left.norad_id - right.norad_id,
+        )
+        .map((record, slot) => ({
+          ...record,
+          satellite_id: satelliteId(plane, slot),
+          plane_id: plane,
+          slot_id: slot,
+        })),
+    );
 }
 
 function effectiveSimulationInput(config: WalkerNetworkConfig, input: SimulationInput): SimulationInput {
@@ -786,7 +845,7 @@ function createNodes(
   const minute = slice * config.time.stepMinutes;
   const orbitModel = orbitModelFromInput(config, input);
   const nodes: SatelliteNode[] = [];
-  const realTleRecords = orbitModel === "real-tle-sgp4" ? realTleRecordsFromInput(input) : undefined;
+  const realTleRecords = orbitModel === "real-tle-sgp4" ? realTleRecordsFromInput(input, config) : undefined;
   const nodeIds = realTleRecords
     ? realTleRecords.map((record) => ({ id: record.satellite_id }))
     : Array.from({ length: config.constellation.planes * config.constellation.satellitesPerPlane }, (_, index) => {
@@ -1032,7 +1091,15 @@ function addLinkWithDegreeLimit(
   const sourceAntenna = antennaByRole(source, sourceRole);
   const targetAntenna = antennaByRole(target, targetRole);
   const antennaMaxRangeKm = maxIslAntennaRangeKm(source, target, sourceRole, targetRole);
-  const budgetResult = islLinkBudget(source, target, sourceRole, targetRole, config, pointingHistory);
+  const budgetResult = islLinkBudget(
+    source,
+    target,
+    sourceRole,
+    targetRole,
+    config,
+    pointingHistory,
+    kind === "intra-plane",
+  );
   const state = precomputedState ?? linkState(kind, source, target, slice, config, antennaMaxRangeKm, budgetResult?.budget);
   const sourceAntennaReady =
     sourceAntenna && sourceAntenna.state !== "fault" && sourceAntenna.occupied_beams < sourceAntenna.max_simultaneous_beams;
@@ -1168,9 +1235,13 @@ function createLinks(
   const { planes, satellitesPerPlane, walkerType } = config.constellation;
 
   for (let plane = 0; plane < planes; plane += 1) {
-    for (let slot = 0; slot < satellitesPerPlane; slot += 1) {
-      const source = byKey.get(`${plane}:${slot}`)!;
-      const nextInPlane = byKey.get(`${plane}:${(slot + 1) % satellitesPerPlane}`)!;
+    const planeNodes = Array.from({ length: satellitesPerPlane }, (_, slot) => byKey.get(`${plane}:${slot}`)!)
+      .filter(Boolean)
+      .sort((a, b) => orbitalPlanePhaseDeg(a) - orbitalPlanePhaseDeg(b) || a.slot - b.slot);
+    if (planeNodes.length < 2) continue;
+    for (let index = 0; index < planeNodes.length; index += 1) {
+      const source = planeNodes[index];
+      const nextInPlane = planeNodes[(index + 1) % planeNodes.length];
       addLinkWithDegreeLimit(
         links,
         usedEndpoints,
@@ -1348,7 +1419,76 @@ function routingNodeUnavailableReason(node: SatelliteNode | undefined) {
   return "";
 }
 
-function shortestPathRoute(sourceId: string, targetId: string, nodes: SatelliteNode[], links: SatelliteLink[]): ShortestPathResult | null {
+function routingLinkCost(
+  link: SatelliteLink,
+  plannedDemandMbps: number,
+  taskTrafficMbps: number,
+  algorithm: WalkerNetworkConfig["routing"]["algorithm"],
+  config: WalkerNetworkConfig,
+) {
+  const baseLatencyMs = Math.max(link.state.latencyMs, 0.1);
+  if (algorithm === "shortest-path") return baseLatencyMs;
+
+  const capacityMbps = Math.max(link.state.bandwidthMbps, link.state.linkBudget?.effective_capacity_mbps ?? 1, 1);
+  const projectedDemandMbps = Math.max(plannedDemandMbps, 0) + Math.max(taskTrafficMbps, 0);
+  const projectedUtilization = projectedDemandMbps / capacityMbps;
+  const utilizationPenaltyMs = Math.max(0, projectedUtilization - 0.65) * baseLatencyMs * 6;
+  const excessMbps = Math.max(projectedDemandMbps - capacityMbps, 0);
+  const excessMb = (excessMbps * config.time.stepMinutes * 60) / 8;
+  const queuePenaltyMs = Math.min(
+    config.trafficModel.maxRouteQueueDelayMs,
+    capacityMbps > 0 ? (excessMb * 8 * 1000) / capacityMbps : config.trafficModel.maxRouteQueueDelayMs,
+  );
+  return baseLatencyMs + utilizationPenaltyMs + queuePenaltyMs;
+}
+
+type RouteQueueEntry = {
+  node: string;
+  distance: number;
+};
+
+function pushRouteQueue(heap: RouteQueueEntry[], entry: RouteQueueEntry) {
+  heap.push(entry);
+  let index = heap.length - 1;
+  while (index > 0) {
+    const parent = Math.floor((index - 1) / 2);
+    if (heap[parent].distance <= entry.distance) break;
+    heap[index] = heap[parent];
+    index = parent;
+  }
+  heap[index] = entry;
+}
+
+function popRouteQueue(heap: RouteQueueEntry[]) {
+  if (heap.length === 0) return undefined;
+  const first = heap[0];
+  const last = heap.pop()!;
+  if (heap.length > 0) {
+    let index = 0;
+    while (true) {
+      const left = index * 2 + 1;
+      const right = left + 1;
+      if (left >= heap.length) break;
+      const child = right < heap.length && heap[right].distance < heap[left].distance ? right : left;
+      if (heap[child].distance >= last.distance) break;
+      heap[index] = heap[child];
+      index = child;
+    }
+    heap[index] = last;
+  }
+  return first;
+}
+
+function shortestPathRoute(
+  sourceId: string,
+  targetId: string,
+  nodes: SatelliteNode[],
+  links: SatelliteLink[],
+  algorithm: WalkerNetworkConfig["routing"]["algorithm"],
+  config: WalkerNetworkConfig,
+  plannedDemandByLink: Map<string, number>,
+  taskTrafficMbps: number,
+): ShortestPathResult | null {
   const nodesById = new Map(nodes.map((node) => [node.id, node]));
   const sourceNode = nodesById.get(sourceId);
   const targetNode = nodesById.get(targetId);
@@ -1363,7 +1503,7 @@ function shortestPathRoute(sourceId: string, targetId: string, nodes: SatelliteN
     if (!nodeCanRouteTraffic(nodesById.get(link.source)) || !nodeCanRouteTraffic(nodesById.get(link.target))) {
       return;
     }
-    const cost = link.state.latencyMs;
+    const cost = routingLinkCost(link, plannedDemandByLink.get(link.id) ?? 0, taskTrafficMbps, algorithm, config);
     graph.get(link.source)?.push({ next: link.target, link, cost });
     graph.get(link.target)?.push({ next: link.source, link, cost });
   });
@@ -1373,18 +1513,16 @@ function shortestPathRoute(sourceId: string, targetId: string, nodes: SatelliteN
   const visited = new Set<string>();
   nodes.forEach((node) => distances.set(node.id, Number.POSITIVE_INFINITY));
   distances.set(sourceId, 0);
+  const queue: RouteQueueEntry[] = [];
+  pushRouteQueue(queue, { node: sourceId, distance: 0 });
 
-  while (visited.size < nodes.length) {
-    let current: string | undefined;
-    let currentDistance = Number.POSITIVE_INFINITY;
-    distances.forEach((distance, nodeId) => {
-      if (!visited.has(nodeId) && distance < currentDistance) {
-        current = nodeId;
-        currentDistance = distance;
-      }
-    });
-
-    if (current === undefined || currentDistance === Number.POSITIVE_INFINITY) break;
+  while (queue.length > 0) {
+    const currentEntry = popRouteQueue(queue);
+    if (!currentEntry) break;
+    const current = currentEntry.node;
+    const currentDistance = currentEntry.distance;
+    if (visited.has(current)) continue;
+    if (currentDistance > (distances.get(current) ?? Number.POSITIVE_INFINITY)) continue;
     if (current === targetId) break;
     visited.add(current);
 
@@ -1395,6 +1533,7 @@ function shortestPathRoute(sourceId: string, targetId: string, nodes: SatelliteN
       if (candidateDistance < knownDistance) {
         distances.set(next, candidateDistance);
         previous.set(next, { node: current!, link });
+        pushRouteQueue(queue, { node: next, distance: candidateDistance });
       }
     });
   }
@@ -1404,6 +1543,7 @@ function shortestPathRoute(sourceId: string, targetId: string, nodes: SatelliteN
   const path = [targetId];
   const linkIds: string[] = [];
   let distanceKmTotal = 0;
+  let latencyMsTotal = 0;
   let cursor = targetId;
   while (cursor !== sourceId) {
     const step = previous.get(cursor);
@@ -1411,6 +1551,7 @@ function shortestPathRoute(sourceId: string, targetId: string, nodes: SatelliteN
     path.unshift(step.node);
     linkIds.unshift(step.link.id);
     distanceKmTotal += step.link.state.distanceKm;
+    latencyMsTotal += step.link.state.latencyMs;
     cursor = step.node;
   }
 
@@ -1419,7 +1560,7 @@ function shortestPathRoute(sourceId: string, targetId: string, nodes: SatelliteN
     linkIds,
     hopCount: Math.max(0, path.length - 1),
     distanceKm: round(distanceKmTotal, 1),
-    latencyMs: round(distances.get(targetId) ?? 0, 1),
+    latencyMs: round(latencyMsTotal, 1),
   };
 }
 
@@ -1432,6 +1573,15 @@ function taskRouteEndpoints(task: SimulationInput["tasks"][number]) {
 
 const taskPriority = (task: SimulationInput["tasks"][number]) => Math.max(0, Math.round(task.priority ?? 0));
 
+function emptyRouteLatencyFields(config: WalkerNetworkConfig) {
+  return {
+    queueDelayMs: 0,
+    queueBacklogDelayMs: 0,
+    latencyCapped: false,
+    timeoutMs: config.trafficModel.taskTimeoutMs,
+  };
+}
+
 function createRoutes(
   slice: number,
   input: SimulationInput,
@@ -1441,11 +1591,16 @@ function createRoutes(
 ): RoutedTaskPath[] {
   const algorithm = input.routingAlgorithm ?? config.routing.algorithm;
   const nodesById = new Map(nodes.map((node) => [node.id, node]));
-  return input.tasks.filter((task) => taskIsActiveInSlice(task, slice)).map((task) => {
+  const plannedDemandByLink = new Map<string, number>();
+  return input.tasks
+    .filter((task) => taskIsActiveInSlice(task, slice))
+    .sort((a, b) => taskPriority(b) - taskPriority(a) || a.task_id.localeCompare(b.task_id))
+    .map((task) => {
     const { source, target } = taskRouteEndpoints(task);
     const trafficMbps = task.traffic_mbps ?? 0;
     const priority = taskPriority(task);
     const taskType = task.task_type;
+    const latencyFields = emptyRouteLatencyFields(config);
     if (!source || !target) {
       return {
         task_id: task.task_id,
@@ -1458,6 +1613,7 @@ function createRoutes(
         hopCount: 0,
         distanceKm: 0,
         latencyMs: 0,
+        ...latencyFields,
         trafficMbps,
         taskType,
         priority,
@@ -1483,6 +1639,7 @@ function createRoutes(
         hopCount: 0,
         distanceKm: 0,
         latencyMs: 0,
+        ...latencyFields,
         trafficMbps,
         taskType,
         priority,
@@ -1506,6 +1663,7 @@ function createRoutes(
         hopCount: 0,
         distanceKm: 0,
         latencyMs: 0,
+        ...latencyFields,
         trafficMbps,
         taskType,
         priority,
@@ -1516,7 +1674,7 @@ function createRoutes(
       };
     }
 
-    const result = shortestPathRoute(source, target, nodes, links);
+    const result = shortestPathRoute(source, target, nodes, links, algorithm, config, plannedDemandByLink, trafficMbps);
     if (!result) {
       return {
         task_id: task.task_id,
@@ -1529,6 +1687,7 @@ function createRoutes(
         hopCount: 0,
         distanceKm: 0,
         latencyMs: 0,
+        ...latencyFields,
         trafficMbps,
         taskType,
         priority,
@@ -1539,6 +1698,10 @@ function createRoutes(
         reason: "当前时间片拓扑中不存在可用路径",
       };
     }
+
+    result.linkIds.forEach((linkId) => {
+      plannedDemandByLink.set(linkId, (plannedDemandByLink.get(linkId) ?? 0) + trafficMbps);
+    });
 
     return {
       task_id: task.task_id,
@@ -1551,6 +1714,7 @@ function createRoutes(
       hopCount: result.hopCount,
       distanceKm: result.distanceKm,
       latencyMs: result.latencyMs,
+      ...latencyFields,
       trafficMbps,
       taskType,
       priority,
@@ -1671,6 +1835,7 @@ function applyRouteTrafficToLinks(
   const routeDeliveredMbpsByTask = new Map<string, number>();
   const routeQueuedMbByTask = new Map<string, number>();
   const routeDroppedMbByTask = new Map<string, number>();
+  const routeBacklogDelayMsByTask = new Map<string, number>();
 
   links.forEach((link) => {
     const newDemandMbps = trafficByLink.get(link.id) ?? 0;
@@ -1719,6 +1884,13 @@ function applyRouteTrafficToLinks(
       routeLinkAllocations.set(key, allocation);
       routeQueuedMbByTask.set(route.task_id, (routeQueuedMbByTask.get(route.task_id) ?? 0) + allocation.queuedMb);
       routeDroppedMbByTask.set(route.task_id, (routeDroppedMbByTask.get(route.task_id) ?? 0) + allocation.droppedMb);
+      if (allocation.queuedMb > 0 && capacityMbps > 0) {
+        const allocationBacklogDelayMs = (allocation.queuedMb * 8 * 1000) / capacityMbps;
+        routeBacklogDelayMsByTask.set(
+          route.task_id,
+          Math.max(routeBacklogDelayMsByTask.get(route.task_id) ?? 0, allocationBacklogDelayMs),
+        );
+      }
     });
 
     linkQueueMbById.set(link.id, queuedMb);
@@ -1744,6 +1916,10 @@ function applyRouteTrafficToLinks(
     route.carriedTrafficMbps = round(routeDeliveredMbpsByTask.get(route.task_id) ?? route.trafficMbps, 2);
     route.queuedTrafficMb = round(routeQueuedMbByTask.get(route.task_id) ?? 0, 2);
     route.droppedTrafficMb = round(routeDroppedMbByTask.get(route.task_id) ?? 0, 2);
+    route.queueBacklogDelayMs = round(routeBacklogDelayMsByTask.get(route.task_id) ?? 0, 4);
+    route.queueDelayMs = round(Math.min(route.queueBacklogDelayMs, config.trafficModel.maxRouteQueueDelayMs), 4);
+    route.timeoutMs = config.trafficModel.taskTimeoutMs;
+    route.latencyCapped = route.queueBacklogDelayMs > route.queueDelayMs || route.droppedTrafficMb > 0;
   });
 
   const nodeEffects = new Map<string, NodeNetworkEffect>();

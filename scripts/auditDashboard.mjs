@@ -168,7 +168,18 @@ try {
   }));
 
   const expectedControls = ["真实运行", "最短路径", "正常业务", "TLE + SGP4"];
-  const expectedExportButtons = ["完整 JSON", "节点 CSV", "链路 CSV", "路由 CSV", "指标 CSV", "任务追踪", "链路影响", "节点影响"];
+  const expectedExportButtons = [
+    "完整 JSON",
+    "节点 CSV",
+    "链路 CSV",
+    "路由 CSV",
+    "指标 CSV",
+    "任务追踪",
+    "链路影响",
+    "节点影响",
+  ];
+  const expectedRouteHeaders = ["优先级", "需求/承载", "排队/丢弃", "遥测增量"];
+
   const checks = {
     "dashboard title is present": desktop.title === "动态拓扑全网感知仪表盘",
     "default controls match stage-one baseline": expectedControls.every((control) =>
@@ -179,13 +190,13 @@ try {
       (item) => item.label === "数据集指纹" && item.value === "e875b03a",
     ),
     "default normal truth fingerprint is stable": desktop.fingerprints.some(
-      (item) => item.label === "真值指纹" && item.value === "0f5fff04",
+      (item) => item.label === "真值指纹" && item.value === "6ce78ab7",
     ),
     "truth panel is present": desktop.has_truth_panel,
     "business trace export buttons are present": expectedExportButtons.every((button) =>
       desktop.export_buttons.includes(button),
     ),
-    "route table exposes per-task service results": ["优先级", "需求/承载", "排队/丢弃", "遥测增量"].every((header) =>
+    "route table exposes per-task service results": expectedRouteHeaders.every((header) =>
       desktop.table_headers.includes(header),
     ),
     "orbital canvas is present": desktop.has_orbital_canvas,

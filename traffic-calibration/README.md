@@ -141,3 +141,51 @@ anomalies[]
 - Cloudflare Radar overview: https://developers.cloudflare.com/radar/
 - Cloudflare Radar NetFlows: https://developers.cloudflare.com/radar/investigate/netflows/
 - Cloudflare Radar traffic dashboard: https://radar.cloudflare.com/traffic
+
+## Radar 原始时序驱动模式
+
+旧的 `radar-calibrated` 数据集使用的是本地 `cloudflare-radar-profile.json` 模板：它参考了 Cloudflare Radar 的公开统计维度，但业务曲线主要由本地 `time_series[].traffic_weight` 控制。因此它只能称为“Radar 风格校准”，不能称为“拟合 Radar 原始曲线”。
+
+新的 `radar-fitted` 模式允许直接接入 Cloudflare Radar API 保存下来的 JSON 响应：
+
+```bash
+npm run generate:radar-traffic -- --snapshot data/tle-snapshots/celestrak-starlink-real-walker-72x22.json --profile traffic-calibration/cloudflare-radar-profile.json --radar-json reports/experiment1-external-realism-72x22/external/cloudflare-radar/radar-as14593-traffic.json --radar-window latest --out examples/datasets/radar-fitted-starlink-72x22-48-traffic.csv --metadata-out examples/datasets/radar-fitted-starlink-72x22-48-traffic.metadata.json --slices 48
+```
+
+该模式会从 Radar JSON 中提取数值时间序列，默认取最新 48 个外部观测点，与 48 个模型时间片一一对应，然后用 min-max 归一化把 Radar 曲线映射到业务强度权重：
+
+```text
+traffic_weight(t) = w_min + normalize(Radar(t)) * (w_max - w_min)
+```
+
+默认参数为：
+
+```text
+w_min = 本地 profile 的最小 traffic_weight
+w_max = 本地 profile 的最大 traffic_weight
+radar_window = latest
+profile anomalies = disabled
+```
+
+默认关闭本地异常模板，是为了避免“Radar 自身峰谷”和“本地手工异常峰谷”叠加后导致曲线再次失真。如需保留本地异常，可显式增加：
+
+```bash
+--radar-keep-profile-anomalies
+```
+
+用于外部真实性实验时，应使用同一个 Radar JSON 和同一个窗口：
+
+```bash
+npm run experiment:realism -- --out reports/experiment1-external-realism-72x22-radar-fitted --snapshot data/tle-snapshots/celestrak-starlink-real-walker-72x22.json --tasks examples/datasets/radar-fitted-starlink-72x22-48-traffic.csv --slices 48 --radar-json reports/experiment1-external-realism-72x22/external/cloudflare-radar/radar-as14593-traffic.json --radar-window latest --external-tle reports/experiment1-external-realism-72x22/external/celestrak-starlink-live.json
+```
+
+本项目最新一次校准排查结果：
+
+```text
+旧模板数据集 model_vs_external_radar_corr = -0.0803
+新 Radar 驱动数据集 model_vs_external_radar_corr = 0.9134
+新 Radar 驱动数据集 model_vs_external_radar_mae_normalized = 0.1214
+Radar 对齐窗口 = 2026-07-01T11:00:00Z 到 2026-07-03T10:00:00Z
+```
+
+注意：Cloudflare Radar AS14593 是公开 ASN 级聚合观测，不是 Starlink 内部 ISL 或卫星节点真实业务日志。因此这里校准的是“业务时间形态”和“峰谷同步关系”，不能宣称模型获得了运营商内部真实流量 trace。

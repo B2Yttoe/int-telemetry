@@ -20,7 +20,7 @@ export type TrafficProfile = "empty" | "low-load" | "normal" | "high-load" | "ho
 export type TaskType = "compute" | "routing" | "downlink" | "telemetry" | "mixed" | "background" | "burst";
 export type OrbitModel = "analytic-walker" | "tle-sgp4" | "real-tle-sgp4";
 export type TleCatalogSource = "synthetic-walker" | "synthetic-starlink-main-shell" | "celestrak" | "space-track" | "file";
-export type RoutingAlgorithm = "shortest-path";
+export type RoutingAlgorithm = "shortest-path" | "congestion-aware-shortest-path";
 export type RoutingStatus = "routed" | "unroutable" | "local" | "not-requested";
 export type SatelliteOperationalStatus = "active" | "decaying" | "deorbited" | "backup";
 export type AntennaType = "ISL" | "SGL" | "USER";
@@ -294,6 +294,8 @@ export interface TrafficModelConfig {
   queueDepthPerQueuedMb: number;
   queueCarryoverRatio: number;
   linkQueueCapacityMb: number;
+  maxRouteQueueDelayMs: number;
+  taskTimeoutMs: number;
   cacheCapacityMb: number;
   telemetryGenerationMbPerSlice: number;
   telemetryCpuMbPerPercent: number;
@@ -771,6 +773,10 @@ export interface RoutedTaskPath {
   hopCount: number;
   distanceKm: number;
   latencyMs: number;
+  queueDelayMs: number;
+  queueBacklogDelayMs: number;
+  latencyCapped: boolean;
+  timeoutMs: number;
   trafficMbps: number;
   taskType?: TaskType | string;
   priority: number;

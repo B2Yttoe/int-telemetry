@@ -69,6 +69,10 @@ const round = (value: number, digits = 2) => {
 
 const normalizeDegrees = (degrees: number) => ((degrees % 360) + 360) % 360;
 
+function angularDistanceDeg(left: number, right: number) {
+  return Math.abs((((left - right + 180) % 360) + 360) % 360 - 180);
+}
+
 const toNumber = (value: unknown) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : Number.NaN;
@@ -269,20 +273,89 @@ function sampleEvenly<T>(items: T[], count: number) {
   return selected;
 }
 
+function phaseAtReference(candidate: Candidate, referenceIso: string) {
+  const epochMs = Date.parse(candidate.epoch);
+  const referenceMs = Date.parse(referenceIso);
+  if (!Number.isFinite(epochMs) || !Number.isFinite(referenceMs)) {
+    return candidate.argumentOfLatitude;
+  }
+  const deltaDays = (referenceMs - epochMs) / 86400000;
+  return normalizeDegrees(candidate.argumentOfPerigee + candidate.meanAnomaly + candidate.meanMotion * 360 * deltaDays);
+}
+
+function withReferencePhase(candidates: Candidate[], referenceIso: string) {
+  return candidates.map((candidate) => ({
+    ...candidate,
+    argumentOfLatitude: phaseAtReference(candidate, referenceIso),
+  }));
+}
+
+function sampleWalkerSlotsByPhase(candidates: Candidate[], count: number) {
+  if (candidates.length <= count) {
+    return [...candidates].sort((a, b) => a.argumentOfLatitude - b.argumentOfLatitude);
+  }
+  if (count <= 1) {
+    return [[...candidates].sort((a, b) => a.argumentOfLatitude - b.argumentOfLatitude)[0]];
+  }
+
+  const slotSpacing = 360 / count;
+  const offsets = candidates.map((candidate) => candidate.argumentOfLatitude);
+  let best: { selected: Candidate[]; score: number } | undefined;
+
+  offsets.forEach((offset) => {
+    const remaining = new Set(candidates);
+    const selected: Candidate[] = [];
+    let score = 0;
+    for (let slot = 0; slot < count; slot += 1) {
+      const targetPhase = normalizeDegrees(offset + slot * slotSpacing);
+      const candidate = [...remaining].sort(
+        (left, right) =>
+          angularDistanceDeg(left.argumentOfLatitude, targetPhase) -
+            angularDistanceDeg(right.argumentOfLatitude, targetPhase) ||
+          left.noradId - right.noradId,
+      )[0];
+      if (!candidate) break;
+      selected.push(candidate);
+      remaining.delete(candidate);
+      score += angularDistanceDeg(candidate.argumentOfLatitude, targetPhase);
+    }
+    if (selected.length !== count) return;
+    if (!best || score < best.score) best = { selected, score };
+  });
+
+  return best?.selected ?? sampleEvenly([...candidates].sort((a, b) => a.argumentOfLatitude - b.argumentOfLatitude), count);
+}
+
+function maxPhaseGapDeg(candidates: Candidate[]) {
+  if (candidates.length < 2) return 360;
+  const phases = candidates.map((candidate) => candidate.argumentOfLatitude).sort((a, b) => a - b);
+  return Math.max(
+    ...phases.map((phase, index) => normalizeDegrees(phases[(index + 1) % phases.length] - phase)),
+  );
+}
+
+function sampledPhaseGapScore(candidates: Candidate[], count: number) {
+  return maxPhaseGapDeg(sampleWalkerSlotsByPhase(candidates, count));
+}
+
 export function buildRealTleSnapshotFromCelestrakJson(
   rawRecords: CelestrakGpJsonRecord[],
   options: BuildRealTleSnapshotOptions,
 ): RealTleCatalogSnapshot {
   const requestedPlanes = Math.max(1, Math.floor(options.planes ?? 72));
   const requestedSlots = Math.max(1, Math.floor(options.satellitesPerPlane ?? 22));
-  const raanThreshold = options.raanClusterThresholdDeg ?? 1.5;
+  const raanThreshold = options.raanClusterThresholdDeg ?? 2.5;
   const candidates = rawRecords
     .map(candidateFromCelestrak)
     .filter((candidate): candidate is Candidate => Boolean(candidate));
-  const shellCandidates = pickShell(candidates, options);
+  const shellCandidates = withReferencePhase(pickShell(candidates, options), options.downloadedAt);
   const clusters = clusterByRaan(shellCandidates, raanThreshold)
     .filter((cluster) => cluster.candidates.length >= requestedSlots)
-    .sort((a, b) => b.candidates.length - a.candidates.length)
+    .sort(
+      (a, b) =>
+        sampledPhaseGapScore(a.candidates, requestedSlots) - sampledPhaseGapScore(b.candidates, requestedSlots) ||
+        b.candidates.length - a.candidates.length,
+    )
     .slice(0, requestedPlanes)
     .sort((a, b) => a.centerRaan - b.centerRaan);
 
@@ -293,7 +366,7 @@ export function buildRealTleSnapshotFromCelestrakJson(
   }
 
   const selected = clusters.flatMap((cluster, planeIndex) =>
-    sampleEvenly(
+    sampleWalkerSlotsByPhase(
       [...cluster.candidates].sort((a, b) => a.argumentOfLatitude - b.argumentOfLatitude),
       requestedSlots,
     ).map((candidate, slotIndex) => ({ candidate, planeIndex, slotIndex })),

@@ -66,6 +66,7 @@ const planes = Number(argValue(args, "--planes", "72"));
 const satellitesPerPlane = Number(argValue(args, "--satellites-per-plane", "22"));
 const targetInclination = argValue(args, "--target-inclination", "");
 const targetAltitude = argValue(args, "--target-altitude", "");
+const raanThreshold = Number(argValue(args, "--raan-threshold", "2.5"));
 const downloadedAt = new Date().toISOString();
 const defaultUrl =
   group === "STARLINK"
@@ -88,6 +89,7 @@ if (!Number.isFinite(planes) || planes <= 0) fail("--planes must be a positive n
 if (!Number.isFinite(satellitesPerPlane) || satellitesPerPlane <= 0) {
   fail("--satellites-per-plane must be a positive number");
 }
+if (!Number.isFinite(raanThreshold) || raanThreshold <= 0) fail("--raan-threshold must be a positive number");
 if (source !== "celestrak") fail("Only --source celestrak is currently supported");
 
 let rawRecords;
@@ -131,6 +133,7 @@ const snapshot = buildRealTleSnapshotFromCelestrakJson(rawRecords, {
   downloadedAt,
   planes,
   satellitesPerPlane,
+  raanClusterThresholdDeg: raanThreshold,
   targetInclinationDeg: targetInclination ? Number(targetInclination) : undefined,
   targetAltitudeKm: targetAltitude ? Number(targetAltitude) : undefined,
 });

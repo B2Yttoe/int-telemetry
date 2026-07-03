@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 const validProfiles = new Set(["empty", "low-load", "normal", "high-load", "hotspot", "burst", "long-duration", "uploaded"]);
 const validOrbitModels = new Set(["analytic-walker", "tle-sgp4", "real-tle-sgp4"]);
 const validModes = new Set(["autonomous", "operational"]);
-const validRouting = new Set(["shortest-path"]);
+const validRouting = new Set(["shortest-path", "congestion-aware-shortest-path"]);
 
 function argValue(args, name, fallback) {
   const index = args.indexOf(name);
@@ -27,7 +27,7 @@ const args = process.argv.slice(2);
 const profile = argValue(args, "--profile", "normal");
 const orbitModel = argValue(args, "--orbit", "tle-sgp4");
 const mode = argValue(args, "--mode", "operational");
-const routingAlgorithm = argValue(args, "--routing", "shortest-path");
+const routingAlgorithm = argValue(args, "--routing", "congestion-aware-shortest-path");
 const tasksPath = argValue(args, "--tasks", "");
 const tleSnapshotPath = argValue(args, "--tle-snapshot", "");
 const slicesOverride = argValue(args, "--slices", "");
