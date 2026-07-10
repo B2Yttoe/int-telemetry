@@ -38,6 +38,8 @@
     "test:int-mc-adaptive-metadata": "node scripts/testIntMcAdaptiveMetadataProfileBehavior.mjs",
     "test:int-mc-oracle-free-planner": "node scripts/testIntMcOracleFreePlannerView.mjs",
     "test:int-mc-causal-observability": "node scripts/testIntMcCausalObservability.mjs",
+    "test:int-mc-experiment-core": "node scripts/testIntMcExperimentCore.mjs",
+    "test:int-mc-ablation-switches": "node scripts/testIntMcAblationSwitches.mjs",
     "test:int-mc-deployable-feedback": "node scripts/testIntMcDeployableFeedbackBoundary.mjs",
     "test:experiment2-oracle-free": "node scripts/testExperiment2OracleFreeBoundary.mjs",
     "test:int-mc-predictable-energy": "node scripts/testIntMcPredictableEnergyPriorBoundary.mjs",
