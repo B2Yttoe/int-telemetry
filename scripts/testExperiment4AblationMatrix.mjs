@@ -4,11 +4,24 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
   buildExperiment4Variants,
+  parseExperiment4CliParameters,
   runExperiment4,
 } from "./runExperiment4Ablation.mjs";
 import { parseCsv } from "./experiments/reportUtils.mjs";
 
 const variants = buildExperiment4Variants();
+assert.deepEqual(parseExperiment4CliParameters([]), {
+  samplingRate: 0.25,
+  targetActiveLinkSamplingRate: 0.25,
+  rank: 5,
+  windowSize: 12,
+  warmupSlices: 6,
+  iterations: 12,
+  downlinkBudgetBytes: 1_000_000_000,
+  maxPathsPerSlice: 12,
+  observabilityMode: "oam-only",
+  feedbackLagSlices: 1,
+});
 assert.equal(variants.length, 6);
 assert.equal(new Set(variants.map((row) => row.id)).size, 6);
 assert.deepEqual(variants.map((row) => row.id), [

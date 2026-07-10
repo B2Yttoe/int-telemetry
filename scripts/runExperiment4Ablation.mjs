@@ -109,12 +109,30 @@ function argValue(args, name, fallback = "") {
 }
 
 function numberArg(args, name, fallback) {
-  return numberValue(argValue(args, name, ""), fallback);
+  const raw = argValue(args, name, "");
+  if (raw === "") return fallback;
+  return numberValue(raw, fallback);
 }
 
 function listArg(args, name, fallback) {
   const raw = argValue(args, name, "");
   return raw ? raw.split(",").map((value) => value.trim()).filter(Boolean) : fallback;
+}
+
+export function parseExperiment4CliParameters(args = []) {
+  const samplingRate = numberArg(args, "--sampling-rate", FORMAL_DEFAULTS.sampling_rate);
+  return {
+    samplingRate,
+    targetActiveLinkSamplingRate: numberArg(args, "--target-active-link-sampling-rate", samplingRate),
+    rank: Math.max(1, Math.floor(numberArg(args, "--rank", FORMAL_DEFAULTS.rank))),
+    windowSize: Math.max(1, Math.floor(numberArg(args, "--window-size", FORMAL_DEFAULTS.window_size))),
+    warmupSlices: Math.max(1, Math.floor(numberArg(args, "--warmup-slices", FORMAL_DEFAULTS.warmup_slices))),
+    iterations: Math.max(1, Math.floor(numberArg(args, "--iterations", FORMAL_DEFAULTS.iterations))),
+    downlinkBudgetBytes: Math.max(0, Math.floor(numberArg(args, "--downlink-budget-bytes", 1_000_000_000))),
+    maxPathsPerSlice: Math.max(1, Math.floor(numberArg(args, "--max-paths-per-slice", FORMAL_DEFAULTS.max_paths_per_slice))),
+    observabilityMode: "oam-only",
+    feedbackLagSlices: Math.max(1, Math.floor(numberArg(args, "--feedback-lag-slices", 1))),
+  };
 }
 
 function relativeDelta(value, baseline) {
@@ -428,18 +446,7 @@ async function main() {
     variants: selectedVariants,
     outputDir,
     rootReportPath,
-    parameters: {
-      samplingRate: numberArg(args, "--sampling-rate", FORMAL_DEFAULTS.sampling_rate),
-      targetActiveLinkSamplingRate: numberArg(args, "--target-active-link-sampling-rate", FORMAL_DEFAULTS.target_active_link_sampling_rate),
-      rank: Math.max(1, Math.floor(numberArg(args, "--rank", FORMAL_DEFAULTS.rank))),
-      windowSize: Math.max(1, Math.floor(numberArg(args, "--window-size", FORMAL_DEFAULTS.window_size))),
-      warmupSlices: Math.max(1, Math.floor(numberArg(args, "--warmup-slices", FORMAL_DEFAULTS.warmup_slices))),
-      iterations: Math.max(1, Math.floor(numberArg(args, "--iterations", FORMAL_DEFAULTS.iterations))),
-      downlinkBudgetBytes: Math.max(0, Math.floor(numberArg(args, "--downlink-budget-bytes", 1_000_000_000))),
-      maxPathsPerSlice: Math.max(1, Math.floor(numberArg(args, "--max-paths-per-slice", FORMAL_DEFAULTS.max_paths_per_slice))),
-      observabilityMode: "oam-only",
-      feedbackLagSlices: Math.max(1, Math.floor(numberArg(args, "--feedback-lag-slices", 1))),
-    },
+    parameters: parseExperiment4CliParameters(args),
     resume: argValue(args, "--resume", "true").toLowerCase() !== "false",
     formal: true,
   });
