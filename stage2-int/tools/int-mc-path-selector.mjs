@@ -4172,6 +4172,8 @@ const minPaths = numberArg(args, "--min-paths-per-slice", 1);
 const maxPaths = numberArg(args, "--max-paths-per-slice", 0);
 const topologyClassThreshold = numberArg(args, "--topology-class-threshold", 0.08);
 const adaptiveReuse = argValue(args, "--adaptive-reuse", "true").toLowerCase() !== "false";
+const incrementalTopologyRepair = argValue(args, "--incremental-topology-repair", "true").toLowerCase() !== "false";
+const forecastRiskScoring = argValue(args, "--forecast-risk-scoring", "true").toLowerCase() !== "false";
 const reuseOverheadPressure = numberArg(args, "--reuse-overhead-pressure", 0.5);
 const minEnergyPercent = numberArg(args, "--min-energy-percent", 20);
 const energyGuardThreshold = numberArg(args, "--energy-guard-threshold", 0.45);
@@ -4276,11 +4278,13 @@ const nodesBySliceAndId = indexBy(planningNodes, (node) => `${node.slice_index}|
 const sliceIndexes = [...linksBySlice.keys()].sort((left, right) => Number(left) - Number(right));
 const linksById = buildLinksById(planningLinks);
 const graphsBySlice = buildGraphsBySlice(planningLinks);
-const forecastBySliceAndLink = buildPredictionForecasts({
-  linksById,
-  sliceIndexes,
-  horizon: predictionScoreHorizon,
-});
+const forecastBySliceAndLink = forecastRiskScoring
+  ? buildPredictionForecasts({
+      linksById,
+      sliceIndexes,
+      horizon: predictionScoreHorizon,
+    })
+  : new Map();
 const oamFeedbackBySlice = buildOamFeedbackBySlice(observableOamPriorityRetests);
 const oamControlBySlice = buildOamControlBySlice(observableOamControlActions);
 const causalPlannerStateRows = [...planningLinks, ...planningNodes]
@@ -4311,6 +4315,7 @@ const selectedLastSeen = new Map();
 const reusablePlansByClass = new Map();
 const selectedRows = [];
 const summaryRows = [];
+let incrementalDeltaCandidatePaths = 0;
 
 contactPlan.perSlice.forEach((slicePlan, slicePosition) => {
   const currentCandidates = pathsBySlice.get(String(slicePlan.slice_index)) ?? [];
@@ -4325,7 +4330,7 @@ contactPlan.perSlice.forEach((slicePlan, slicePosition) => {
   const baseCandidateRows = (useCached ? cachedCandidates : currentCandidates).map((path) =>
     adaptCandidatePath(path, slicePlan, candidateSource),
   );
-  const candidateRows = useCached
+  const candidateRows = useCached && incrementalTopologyRepair
     ? appendOamDeltaCandidates({
         cachedRows: baseCandidateRows,
         currentCandidates,
@@ -4333,6 +4338,9 @@ contactPlan.perSlice.forEach((slicePlan, slicePosition) => {
         targets: mandatoryTargets,
       })
     : baseCandidateRows;
+  incrementalDeltaCandidatePaths += candidateRows.filter(
+    (row) => row.reused_candidate_source === "topology-reuse-cache-oam-delta",
+  ).length;
   let result = selectSlicePaths({
     slicePosition,
     slicePlan,
@@ -4589,6 +4597,11 @@ const report = {
     },
     mininet_code_not_ported: true,
     uses_predicted_contact_plan: Boolean(predictedContactPlan),
+    mechanism_flags: {
+      adaptive_reuse: adaptiveReuse,
+      incremental_topology_repair: incrementalTopologyRepair,
+      forecast_risk_scoring: forecastRiskScoring,
+    },
     observability_mode: observabilityMode,
     feedback_lag_slices: feedbackLagSlices,
     causal_oam_boundary_enabled: feedbackLagSlices >= 1,
@@ -4609,6 +4622,8 @@ const report = {
     topology_class_threshold: topologyClassThreshold,
     adaptive_threshold_policy: "calibrated-tighten-on-drift-oam-risk-relax-on-stability-planning-pressure",
     adaptive_reuse_enabled: adaptiveReuse,
+    incremental_topology_repair_enabled: incrementalTopologyRepair,
+    forecast_risk_scoring_enabled: forecastRiskScoring,
     threshold_calibration_horizon_slices: thresholdCalibrationHorizon,
     prediction_score_horizon_slices: predictionScoreHorizon,
     cost_aware_sampling_enabled: costAwareSampling,
@@ -4651,6 +4666,7 @@ const report = {
   },
   coverage: {
     candidate_paths: candidatePaths.length,
+    incremental_delta_candidate_paths: incrementalDeltaCandidatePaths,
     causal_feedback_rows: causalFeedbackRows.length,
     causal_planner_state_rows: causalPlannerStateRows.length,
     causal_feedback_violations: causalFeedbackViolations,
