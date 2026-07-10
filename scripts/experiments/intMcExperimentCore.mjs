@@ -222,6 +222,79 @@ export async function collectIntMcMetrics({ truthDir, stage2Dir, groundDir }) {
   };
 }
 
+function groupBy(rows, keyFn) {
+  const map = new Map();
+  (rows ?? []).forEach((row) => {
+    const key = keyFn(row);
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(row);
+  });
+  return map;
+}
+
+function mean(values) {
+  const finite = values.filter(Number.isFinite);
+  return finite.length ? finite.reduce((total, value) => total + value, 0) / finite.length : 0;
+}
+
+function absoluteMean(rows, field) {
+  return round(mean(rows.map((row) => Math.abs(numberValue(row[field], NaN)))), 4);
+}
+
+function equalityRate(rows, leftField, rightField) {
+  if (!rows.length) return 0;
+  return round(rows.filter((row) => String(row[leftField]) === String(row[rightField])).length / rows.length, 4);
+}
+
+export async function collectIntMcMetricsBySlice({ stage2Dir, groundDir }) {
+  const [summaryRows, overheadRows, linkErrorRows, nodeErrorRows] = await Promise.all([
+    readCsv(join(stage2Dir, "probe-summary-int-mc.csv")),
+    readCsv(join(stage2Dir, "probe-int-overhead-by-slice-int-mc.csv")),
+    readCsv(join(groundDir, "int-mc-link-errors.csv")),
+    readCsv(join(groundDir, "int-mc-node-errors.csv")),
+  ]);
+  const summaryBySlice = new Map(summaryRows.map((row) => [String(row.slice_index), row]));
+  const overheadBySlice = new Map(overheadRows.map((row) => [String(row.slice_index), row]));
+  const linksBySlice = groupBy(linkErrorRows, (row) => String(row.slice_index));
+  const nodesBySlice = groupBy(nodeErrorRows, (row) => String(row.slice_index));
+  const sliceIndexes = [...new Set([
+    ...summaryBySlice.keys(),
+    ...overheadBySlice.keys(),
+    ...linksBySlice.keys(),
+    ...nodesBySlice.keys(),
+  ])].sort((left, right) => Number(left) - Number(right));
+
+  return sliceIndexes.map((sliceIndex) => {
+    const summary = summaryBySlice.get(sliceIndex) ?? {};
+    const overhead = overheadBySlice.get(sliceIndex) ?? {};
+    const links = linksBySlice.get(sliceIndex) ?? [];
+    const nodes = nodesBySlice.get(sliceIndex) ?? [];
+    const inferredLinks = links.filter((row) => row.observation_source === "inferred");
+    return {
+      slice_index: Number(sliceIndex),
+      time: summary.time ?? "",
+      selected_paths: numberValue(summary.selected_paths),
+      active_links: numberValue(summary.active_links),
+      sampled_active_links: numberValue(summary.sampled_active_links),
+      active_link_sampling_coverage: numberValue(summary.active_link_sampling_coverage),
+      candidate_source: summary.candidate_source ?? "",
+      planning_reuse_mode: summary.planning_reuse_mode ?? "",
+      planning_cost_saved_units: numberValue(summary.planning_cost_saved_units),
+      telemetry_bytes: numberValue(overhead.total_telemetry_generated_bytes),
+      telemetry_energy_j: numberValue(overhead.total_telemetry_energy_j),
+      hop_records: numberValue(overhead.hop_records),
+      report_count: numberValue(overhead.reports),
+      cpu_mae: absoluteMean(nodes, "cpu_error"),
+      queue_depth_mae: absoluteMean(nodes, "queue_depth_error"),
+      energy_percent_mae: absoluteMean(nodes, "energy_error"),
+      node_mode_accuracy: equalityRate(nodes, "truth_mode", "mode_estimate"),
+      link_utilization_mae: absoluteMean(links, "utilization_error"),
+      utilization_inferred_mae: absoluteMean(inferredLinks, "utilization_error"),
+      link_status_accuracy: equalityRate(links, "truth_status", "status_estimate"),
+    };
+  });
+}
+
 const DEFAULT_MECHANISMS = Object.freeze({
   adaptiveReuse: true,
   incrementalTopologyRepair: true,
@@ -474,6 +547,7 @@ export async function runTwoPassVariant({
   outputDir,
   parameters = {},
   resume = true,
+  sharedPass1 = null,
 } = {}) {
   await mkdir(outputDir, { recursive: true });
   const manifestPath = join(outputDir, "run-manifest.json");
@@ -501,6 +575,7 @@ export async function runTwoPassVariant({
     parameters: normalizedParameters,
     truth_metadata_sha256: truthMetadataHash,
     candidate_paths_sha256: candidatePathsHash,
+    shared_pass1_fingerprint: sharedPass1?.fingerprint ?? "",
   });
 
   if (resume && existsSync(manifestPath)) {
@@ -515,8 +590,8 @@ export async function runTwoPassVariant({
     }
   }
 
-  const pass1Stage2Dir = join(outputDir, "stage2", "int-mc-pass1");
-  const pass1GroundDir = join(outputDir, "ground-oam", "int-mc-pass1");
+  const pass1Stage2Dir = sharedPass1?.stage2Dir ?? join(outputDir, "stage2", "int-mc-pass1");
+  const pass1GroundDir = sharedPass1?.groundDir ?? join(outputDir, "ground-oam", "int-mc-pass1");
   const pass2Stage2Dir = join(outputDir, "stage2", variant.id);
   const pass2GroundDir = join(outputDir, "ground-oam", variant.id);
   await writeJson(manifestPath, {
@@ -528,16 +603,23 @@ export async function runTwoPassVariant({
     input_fingerprint: inputFingerprint,
   });
 
-  const before = await runIntMcPass({
-    label: `${profile.short_label} pass1`,
-    truthDir,
-    candidatePathsPath,
-    stage2Dir: pass1Stage2Dir,
-    groundDir: pass1GroundDir,
-    ...normalizedParameters,
-    mechanisms: {
-      adaptiveReuse: true,
-    },
+  const before = sharedPass1?.run ?? await runIntMcPass({
+      label: `${profile.short_label} pass1`,
+      truthDir,
+      candidatePathsPath,
+      stage2Dir: pass1Stage2Dir,
+      groundDir: pass1GroundDir,
+      ...normalizedParameters,
+      mechanisms: {
+        adaptiveReuse: true,
+      },
+    });
+  const pass1Fingerprint = sharedPass1?.fingerprint ?? stableHash({
+    truth_metadata_sha256: truthMetadataHash,
+    candidate_paths_sha256: candidatePathsHash,
+    selector_report_sha256: await sha256File(before.artifacts.selector_report_json),
+    evaluation_sha256: await sha256File(before.artifacts.evaluation_json),
+    parameters: normalizedParameters,
   });
 
   const combinedFeedbackPath = join(outputDir, "combined-int-mc-feedback.csv");
@@ -579,6 +661,9 @@ export async function runTwoPassVariant({
     truth_error_feedback_enabled: false,
     combined_feedback_csv: combinedFeedbackPath,
     combined_feedback_rows: combinedFeedbackRows.length,
+    pass1_stage2_dir: pass1Stage2Dir,
+    pass1_ground_dir: pass1GroundDir,
+    pass1_fingerprint: pass1Fingerprint,
     before,
     after,
   };
