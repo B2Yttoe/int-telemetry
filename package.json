@@ -78,6 +78,8 @@
     "test:experiment10:smoke-artifacts": "node scripts/testExperiment10Artifacts.mjs --input reports/_scratch/experiment10-equal-budget-smoke",
     "test:experiment10:artifacts": "node scripts/testExperiment10Artifacts.mjs --input reports/experiment10-equal-budget-dynamic-multiseed",
     "test:experiment11": "node scripts/testExperiment11VariantDefinitions.mjs && node scripts/testDynamicAblationStatistics.mjs && node scripts/testExperiment11Matrix.mjs",
+    "test:experiment11:smoke-artifacts": "node scripts/testExperiment11Artifacts.mjs --input reports/_scratch/experiment11-dynamic-ablation-smoke",
+    "test:experiment11:artifacts": "node scripts/testExperiment11Artifacts.mjs --input reports/experiment11-dynamic-equal-budget-ablation",
     "test:experiment9": "node scripts/testExperiment9ReportBoundaries.mjs",
     "test:infocom-evidence": "node scripts/testInfocomEvidenceSynthesis.mjs",
     "test:experiments4-7-reports": "node scripts/testExperiments4To7RootReports.mjs",
