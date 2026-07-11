@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a fixed-budget causal experiment that raises LEO topology dynamicity from 5% to 25% and compares native INT-MC with enhanced LEO-INT-MC on reconstruction error, invalid paths, replanning cost, and telemetry overhead.
+**Goal:** Build a fixed-budget causal experiment that raises additional inter-plane stress from 5% to 25%, measures resulting Jaccard topology dynamicity, and compares native INT-MC with enhanced LEO-INT-MC on reconstruction error, invalid paths, replanning cost, and telemetry overhead.
 
 **Architecture:** Add an experiment-only deterministic trace transformer that produces audited Stage-1 stress inputs while preserving intra-plane links and degree limits. Run both methods through the existing shared INT-MC experiment core, enforce matching input and budget fingerprints, then generate CSV/JSON/HTML/Markdown evidence.
 
@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Do not modify Stage-1 Walker/TLE, link-budget, energy, routing, or workload equations.
-- Formal targets are exactly `0.05,0.10,0.15,0.20,0.25` with tolerance `0.01`.
+- Formal additional-stress targets are exactly `0.05,0.10,0.15,0.20,0.25` with tolerance `0.01`; absolute Jaccard dynamicity is an outcome.
 - Formal runs use all three constellation profiles, 48 slices, and fixed direct-observation budgets.
 - Intra-plane links are immutable and no node may exceed four active ISLs.
 - Current-slice hidden truth is evaluation-only and never enters planner feedback.
@@ -27,7 +27,7 @@
 
 **Interfaces:**
 - Produces: `topologyDynamicity(previousRows, currentRows): {jaccard_similarity:number,dynamicity:number}`
-- Produces: `transformDynamicityTrace({links, targetDynamicity, seed, tolerance}): {links,mutations,bySlice,summary}`
+- Produces: `transformDynamicityTrace({links, targetStressRate, seed, tolerance}): {links,mutations,bySlice,summary}`
 - Consumes: parsed `links.csv` rows from `reportUtils.mjs`.
 
 - [ ] **Step 1: Write failing metric and invariants tests**
@@ -44,10 +44,10 @@ assert.deepEqual(topologyDynamicity(previous, current), {
 });
 
 const links = buildFixtureWithStableIntraPlaneAndMutableInterPlaneLinks();
-const first = transformDynamicityTrace({ links, targetDynamicity: 0.25, seed: "exp8", tolerance: 0.01 });
-const second = transformDynamicityTrace({ links, targetDynamicity: 0.25, seed: "exp8", tolerance: 0.01 });
+const first = transformDynamicityTrace({ links, targetStressRate: 0.25, seed: "exp8", tolerance: 0.01 });
+const second = transformDynamicityTrace({ links, targetStressRate: 0.25, seed: "exp8", tolerance: 0.01 });
 assert.deepEqual(first, second);
-assert.ok(Math.abs(first.summary.achieved_mean_dynamicity - 0.25) <= 0.01);
+assert.ok(Math.abs(first.summary.achieved_stress_rate - 0.25) <= 0.01);
 assert.equal(first.links.filter((row) => row.kind === "intra-plane").map(JSON.stringify).join("\n"), links.filter((row) => row.kind === "intra-plane").map(JSON.stringify).join("\n"));
 assert.ok(maximumActiveDegree(first.links) <= 4);
 ```
@@ -236,4 +236,3 @@ Expected: all PASS.
 git add EXPERIMENT_8_DYNAMICITY_CAUSALITY_REPORT.md
 git commit -m "docs: report LEO dynamicity causality experiment"
 ```
-

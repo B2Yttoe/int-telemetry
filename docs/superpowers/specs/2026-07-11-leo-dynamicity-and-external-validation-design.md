@@ -15,7 +15,7 @@ The experiments must report negative results. They must not tune a method agains
 
 - Three existing constellation profiles: Iridium NEXT 6x11, Telesat-1015 27x13, and Starlink 72x22.
 - Forty-eight time slices per formal controlled-dynamicity run.
-- Dynamicity targets of 5%, 10%, 15%, 20%, and 25%.
+- Additional inter-plane stress targets of 5%, 10%, 15%, 20%, and 25%; absolute Jaccard dynamicity is measured as an outcome.
 - Native INT-MC and full enhanced LEO-INT-MC under an identical fixed direct-observation budget.
 - Node reconstruction, link reconstruction, path validity, reporting interruption, replanning, telemetry bytes, planning time, and completion time.
 - Public CelesTrak orbital data, Cloudflare Radar traffic shape, and RIPE Atlas user-side measurements.
@@ -47,7 +47,15 @@ Selecting naturally volatile windows avoids injected changes but confounds topol
 
 ## 4. Controlled Dynamicity Experiment
 
-### 4.1 Dynamicity definition
+### 4.1 Stress dose and dynamicity definition
+
+The controlled independent variable is the fraction of physically active inter-plane links additionally disabled by the experiment. For eligible active inter-plane links \(A_t\) and controlled mutations \(M_t\):
+
+\[
+R_t=\frac{|M_t|}{|A_t|}.
+\]
+
+Formal stress targets are \(R\in\{0.05,0.10,0.15,0.20,0.25\}\). The cumulative achieved stress rate must be within \(0.01\) of the requested rate. This distinction is necessary because a real LEO trace may already have more than 5% natural topology dynamicity; reducing it to an absolute 5% would require forcing physically unavailable links up.
 
 For consecutive active-link sets \(E_{t-1}\) and \(E_t\), topology similarity is:
 
@@ -61,13 +69,7 @@ Topology dynamicity is:
 D_t = 1 - J_t.
 \]
 
-For target level \(d\), the generator seeks:
-
-\[
-\left|\frac{1}{T-1}\sum_{t=1}^{T-1}D_t-d\right| \leq \epsilon,
-\]
-
-with \(\epsilon=0.01\) for formal runs. The achieved value, not the requested value, is used on plots and in statistical analysis.
+Requested stress rate, achieved stress rate, and absolute Jaccard dynamicity are all reported. Error and overhead curves use achieved stress rate as the controlled x-axis and include absolute dynamicity as a secondary x-axis.
 
 ### 4.2 Deterministic mutation policy
 
@@ -81,7 +83,7 @@ Each selected inter-plane mutation must satisfy:
 - link status, active flag, capacity, utilization, and failure reason remain internally consistent;
 - every mutation records its cause and before/after state.
 
-The transformer calibrates the number of mutations against achieved Jaccard dynamicity. It fails instead of silently accepting a run outside tolerance.
+The transformer cumulatively calibrates the number of additional inter-plane mutations against the requested stress rate. It fails instead of silently accepting a stress dose outside tolerance. It never forces a physically down link up.
 
 ### 4.3 Controlled factors
 
@@ -257,8 +259,8 @@ Tests are written before production code and cover:
 
 ## 9. Acceptance Criteria
 
-- Five requested dynamicity levels are represented for all three constellations and both methods.
-- Actual mean dynamicity is within 0.01 of each target for formal runs.
+- Five requested inter-plane stress levels are represented for all three constellations and both methods.
+- Achieved cumulative stress rate is within 0.01 of each target; actual mean Jaccard dynamicity is reported separately.
 - Fixed-budget and shared-input audits pass for every pair.
 - Per-slice path failure and replanning data are non-empty.
 - Node and link reconstruction metrics are present for every method-level combination.
@@ -266,4 +268,3 @@ Tests are written before production code and cover:
 - External validation reports orbital, traffic-shape, and user-RTT evidence separately.
 - CPU, battery, and queue are explicitly labeled as simulator-internal latent state.
 - All new tests, the existing related test suite, `npm run build`, and `npm run verify:goal` pass.
-
