@@ -82,6 +82,27 @@ assert.equal(
   true,
 );
 
+const lowStructuredStress = transformDynamicityTrace({
+  links,
+  targetStressRate: 0.05,
+  seed: "structured-stress",
+  tolerance: 0.06,
+});
+const highStructuredStress = transformDynamicityTrace({
+  links,
+  targetStressRate: 0.25,
+  seed: "structured-stress",
+  tolerance: 0.05,
+});
+assert.ok(
+  highStructuredStress.summary.achieved_controlled_churn_rate > lowStructuredStress.summary.achieved_controlled_churn_rate,
+  "higher stress must produce more controlled inter-plane churn",
+);
+assert.ok(
+  Math.abs(lowStructuredStress.summary.mean_forced_down_fraction - highStructuredStress.summary.mean_forced_down_fraction) < 1e-12,
+  "all stress levels must preserve the same mean forced-down density",
+);
+
 assert.throws(
   () => transformDynamicityTrace({ links, targetStressRate: 1.1, seed: "invalid", tolerance: 0.001 }),
   /within \[0, 1\]/i,

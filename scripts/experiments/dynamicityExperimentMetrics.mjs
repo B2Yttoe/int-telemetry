@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 const FAIRNESS_FIELDS = Object.freeze([
   "truth_metadata_sha256",
+  "truth_links_sha256",
   "candidate_paths_sha256",
   "parameters.samplingRate",
   "parameters.targetActiveLinkSamplingRate",
@@ -127,6 +128,26 @@ export function calculatePathValidity({ probeRows = [], linkRows = [] } = {}) {
       failed_hop: failedHop,
     };
   });
+}
+
+export function calculateCarryoverPathValidity({ probeRows = [], linkRows = [] } = {}) {
+  const availableSlices = new Set(linkRows.map((row) => sliceKey(row.slice_index)));
+  const shifted = probeRows.flatMap((probe) => {
+    const planSlice = sliceKey(probe.slice_index);
+    const evaluationSlice = planSlice + 1;
+    if (!availableSlices.has(evaluationSlice)) return [];
+    return [{
+      ...probe,
+      slice_index: String(evaluationSlice),
+      plan_slice_index: planSlice,
+      evaluation_slice_index: evaluationSlice,
+    }];
+  });
+  return calculatePathValidity({ probeRows: shifted, linkRows }).map((row, index) => ({
+    ...row,
+    plan_slice_index: shifted[index].plan_slice_index,
+    evaluation_slice_index: shifted[index].evaluation_slice_index,
+  }));
 }
 
 export function summarizePathValidity(rows = []) {

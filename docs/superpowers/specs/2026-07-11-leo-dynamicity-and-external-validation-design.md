@@ -49,13 +49,13 @@ Selecting naturally volatile windows avoids injected changes but confounds topol
 
 ### 4.1 Stress dose and dynamicity definition
 
-The controlled independent variable is the fraction of physically active inter-plane links additionally disabled by the experiment. For eligible active inter-plane links \(A_t\) and controlled mutations \(M_t\):
+The controlled independent variable is the fraction of physically active inter-plane links whose experiment-controlled membership changes between consecutive slices. A fixed 25% stress pool keeps mean link density comparable across all levels. For eligible active inter-plane links \(A_t\), controlled-down sets \(M_{t-1}\) and \(M_t\), and controlled swap count \(Q_t\):
 
 \[
-R_t=\frac{|M_t|}{|A_t|}.
+R_t=\frac{|M_t\triangle M_{t-1}|}{|A_t|}\approx\frac{2Q_t}{|A_t|}.
 \]
 
-Formal stress targets are \(R\in\{0.05,0.10,0.15,0.20,0.25\}\). The cumulative achieved stress rate must be within \(0.01\) of the requested rate. This distinction is necessary because a real LEO trace may already have more than 5% natural topology dynamicity; reducing it to an absolute 5% would require forcing physically unavailable links up.
+Formal churn targets are \(R\in\{0.05,0.10,0.15,0.20,0.25\}\). The cumulative achieved controlled churn rate must be within \(0.01\) of the requested rate. This distinction is necessary because a real LEO trace may already have more than 5% natural topology dynamicity; reducing it to an absolute 5% would require forcing physically unavailable links up. Holding stress-pool density fixed also prevents high-dynamicity scenarios from becoming harder merely because fewer links remain available.
 
 For consecutive active-link sets \(E_{t-1}\) and \(E_t\), topology similarity is:
 
@@ -83,7 +83,7 @@ Each selected inter-plane mutation must satisfy:
 - link status, active flag, capacity, utilization, and failure reason remain internally consistent;
 - every mutation records its cause and before/after state.
 
-The transformer cumulatively calibrates the number of additional inter-plane mutations against the requested stress rate. It fails instead of silently accepting a stress dose outside tolerance. It never forces a physically down link up.
+The transformer cumulatively calibrates controlled inter-plane swaps against the requested churn rate while holding the forced-down pool near 25% of eligible inter-plane links. It fails instead of silently accepting a churn dose outside tolerance. It never forces a physically down link up.
 
 ### 4.3 Controlled factors
 
@@ -230,7 +230,7 @@ The Stage-1 simulator and Stage-2 reconstruction algorithms remain unchanged unl
 
 Formal runs fail when:
 
-- achieved dynamicity is outside tolerance;
+- achieved controlled churn rate is outside tolerance;
 - transformed links violate degree or intra-plane stability constraints;
 - compared methods have different input fingerprints or telemetry budgets;
 - current hidden truth appears in planner inputs;
@@ -259,8 +259,8 @@ Tests are written before production code and cover:
 
 ## 9. Acceptance Criteria
 
-- Five requested inter-plane stress levels are represented for all three constellations and both methods.
-- Achieved cumulative stress rate is within 0.01 of each target; actual mean Jaccard dynamicity is reported separately.
+- Five requested inter-plane churn levels are represented for all three constellations and both methods.
+- Achieved cumulative controlled churn rate is within 0.01 of each target; mean forced-down density and actual Jaccard dynamicity are reported separately.
 - Fixed-budget and shared-input audits pass for every pair.
 - Per-slice path failure and replanning data are non-empty.
 - Node and link reconstruction metrics are present for every method-level combination.

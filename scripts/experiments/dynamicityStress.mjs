@@ -77,10 +77,10 @@ function candidateForMask(rows, mask) {
   return rows.map((row) => (mask.has(String(row.link_id)) ? downMutation(row) : { ...row }));
 }
 
-function eligibleForSlice(rows, seed, sliceIndex) {
+function eligibleForSlice(rows, seed, phaseIndex) {
   return rows
     .filter((row) => row.kind === "inter-plane" && isActive(row))
-    .sort((left, right) => stableScore(seed, sliceIndex, left.link_id).localeCompare(stableScore(seed, sliceIndex, right.link_id)));
+    .sort((left, right) => stableScore(seed, phaseIndex, left.link_id).localeCompare(stableScore(seed, phaseIndex, right.link_id)));
 }
 
 function mutationRows(originalRows, transformedRows, targetStressRate) {
@@ -111,11 +111,15 @@ export function transformDynamicityTrace({
   targetStressRate,
   seed = "experiment8",
   tolerance = 0.01,
+  forcedDownFraction = 0.25,
 } = {}) {
   if (!Number.isFinite(targetStressRate) || targetStressRate < 0 || targetStressRate > 1) {
     throw new Error("targetStressRate must be within [0, 1]");
   }
   if (!Number.isFinite(tolerance) || tolerance < 0) throw new Error("tolerance must be non-negative");
+  if (!Number.isFinite(forcedDownFraction) || forcedDownFraction < 0 || forcedDownFraction > 0.5) {
+    throw new Error("forcedDownFraction must be within [0, 0.5]");
+  }
   const grouped = new Map();
   links.forEach((row) => {
     const slice = numericSlice(row);
@@ -132,17 +136,57 @@ export function transformDynamicityTrace({
   let previous = null;
   let dynamicitySum = 0;
   let transitionCount = 0;
-  let cumulativeEligible = 0;
-  let cumulativeMutations = 0;
+  let cumulativeTransitionEligible = 0;
+  let cumulativeSwapEvents = 0;
+  let previousMask = new Set();
 
   slices.forEach((sliceIndex, position) => {
     const originalRows = grouped.get(sliceIndex).map((row) => ({ ...row }));
-    const eligible = eligibleForSlice(originalRows, seed, sliceIndex);
-    cumulativeEligible += eligible.length;
-    const desiredCumulativeMutations = Math.round(targetStressRate * cumulativeEligible);
-    const mutationCount = Math.max(0, Math.min(eligible.length, desiredCumulativeMutations - cumulativeMutations));
-    cumulativeMutations += mutationCount;
-    const mask = new Set(eligible.slice(0, mutationCount).map((row) => String(row.link_id)));
+    const eligible = eligibleForSlice(originalRows, seed, `eligible:${sliceIndex}`);
+    const eligibleIds = new Set(eligible.map((row) => String(row.link_id)));
+    const targetMaskSize = Math.max(0, Math.min(eligible.length, Math.round(forcedDownFraction * eligible.length)));
+    let mask = new Set([...previousMask].filter((id) => eligibleIds.has(id)));
+    let naturalMaskReplacements = 0;
+    if (position === 0) {
+      mask = new Set(
+        eligibleForSlice(originalRows, seed, "initial-mask")
+          .slice(0, targetMaskSize)
+          .map((row) => String(row.link_id)),
+      );
+    } else {
+      const removeExcess = [...mask]
+        .sort((left, right) => stableScore(seed, `trim:${sliceIndex}`, left).localeCompare(stableScore(seed, `trim:${sliceIndex}`, right)));
+      while (mask.size > targetMaskSize) {
+        mask.delete(removeExcess.shift());
+        naturalMaskReplacements += 1;
+      }
+      const fill = eligible
+        .filter((row) => !mask.has(String(row.link_id)))
+        .sort((left, right) => stableScore(seed, `fill:${sliceIndex}`, left.link_id).localeCompare(stableScore(seed, `fill:${sliceIndex}`, right.link_id)));
+      while (mask.size < targetMaskSize && fill.length > 0) {
+        mask.add(String(fill.shift().link_id));
+        naturalMaskReplacements += 1;
+      }
+    }
+
+    let controlledSwapCount = 0;
+    if (position > 0 && eligible.length > 0 && mask.size > 0 && mask.size < eligible.length) {
+      cumulativeTransitionEligible += eligible.length;
+      const desiredCumulativeSwaps = Math.round((targetStressRate * cumulativeTransitionEligible) / 2);
+      const requestedSwaps = Math.max(0, desiredCumulativeSwaps - cumulativeSwapEvents);
+      const removable = [...mask]
+        .sort((left, right) => stableScore(seed, `swap-out:${sliceIndex}`, left).localeCompare(stableScore(seed, `swap-out:${sliceIndex}`, right)));
+      const addable = eligible
+        .map((row) => String(row.link_id))
+        .filter((id) => !mask.has(id))
+        .sort((left, right) => stableScore(seed, `swap-in:${sliceIndex}`, left).localeCompare(stableScore(seed, `swap-in:${sliceIndex}`, right)));
+      controlledSwapCount = Math.min(requestedSwaps, removable.length, addable.length);
+      for (let index = 0; index < controlledSwapCount; index += 1) {
+        mask.delete(removable[index]);
+        mask.add(addable[index]);
+      }
+      cumulativeSwapEvents += controlledSwapCount;
+    }
     const selected = candidateForMask(originalRows, mask);
     let selectedMetric = { jaccard_similarity: 1, dynamicity: 0 };
     if (previous) {
@@ -156,20 +200,27 @@ export function transformDynamicityTrace({
       slice_index: sliceIndex,
       time: selected[0]?.time ?? "",
       target_stress_rate: targetStressRate,
-      achieved_stress_rate: eligible.length > 0 ? mutationCount / eligible.length : 0,
+      achieved_stress_rate: position > 0 && eligible.length > 0 ? (2 * controlledSwapCount) / eligible.length : 0,
       jaccard_similarity: selectedMetric.jaccard_similarity,
       dynamicity: selectedMetric.dynamicity,
       active_links: activeIds(selected).size,
       eligible_inter_plane_links: eligible.length,
-      controlled_mutations: mutationCount,
+      controlled_mutations: mask.size,
+      forced_down_fraction: eligible.length > 0 ? mask.size / eligible.length : 0,
+      controlled_swap_count: controlledSwapCount,
+      controlled_churn_rate: position > 0 && eligible.length > 0 ? (2 * controlledSwapCount) / eligible.length : 0,
+      natural_mask_replacements: naturalMaskReplacements,
       transition_index: position === 0 ? "initial" : transitionCount,
     });
     previous = selected;
+    previousMask = mask;
   });
 
   const achievedMean = mean(bySlice.slice(1).map((row) => row.dynamicity));
-  const achievedStressRate = cumulativeEligible > 0 ? cumulativeMutations / cumulativeEligible : 0;
-  if (Math.abs(achievedStressRate - targetStressRate) > tolerance) {
+  const achievedStressRate = cumulativeTransitionEligible > 0
+    ? (2 * cumulativeSwapEvents) / cumulativeTransitionEligible
+    : 0;
+  if (Math.abs(achievedStressRate - targetStressRate) > tolerance + 1e-12) {
     throw new Error(
       `Unable to achieve target stress rate ${targetStressRate} within tolerance ${tolerance}; achieved ${achievedStressRate}`,
     );
@@ -187,10 +238,14 @@ export function transformDynamicityTrace({
       seed,
       target_stress_rate: targetStressRate,
       achieved_stress_rate: achievedStressRate,
+      achieved_controlled_churn_rate: achievedStressRate,
       achieved_mean_dynamicity: achievedMean,
       mean_jaccard_similarity: mean(bySlice.slice(1).map((row) => row.jaccard_similarity)),
+      mean_forced_down_fraction: mean(bySlice.map((row) => row.forced_down_fraction)),
+      forced_down_fraction_target: forcedDownFraction,
       transition_count: transitionCount,
       mutation_count: mutations.length,
+      controlled_swap_events: cumulativeSwapEvents,
       maximum_active_degree: degree,
       baseline_maximum_active_degree: originalDegree,
     },

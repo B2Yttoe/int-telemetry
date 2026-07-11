@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a fixed-budget causal experiment that raises additional inter-plane stress from 5% to 25%, measures resulting Jaccard topology dynamicity, and compares native INT-MC with enhanced LEO-INT-MC on reconstruction error, invalid paths, replanning cost, and telemetry overhead.
+**Goal:** Build a fixed-budget causal experiment that raises controlled inter-plane churn from 5% to 25% at constant mean link density, measures resulting Jaccard topology dynamicity, and compares native INT-MC with enhanced LEO-INT-MC on reconstruction error, invalid paths, replanning cost, and telemetry overhead.
 
 **Architecture:** Add an experiment-only deterministic trace transformer that produces audited Stage-1 stress inputs while preserving intra-plane links and degree limits. Run both methods through the existing shared INT-MC experiment core, enforce matching input and budget fingerprints, then generate CSV/JSON/HTML/Markdown evidence.
 
@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Do not modify Stage-1 Walker/TLE, link-budget, energy, routing, or workload equations.
-- Formal additional-stress targets are exactly `0.05,0.10,0.15,0.20,0.25` with tolerance `0.01`; absolute Jaccard dynamicity is an outcome.
+- Formal controlled-churn targets are exactly `0.05,0.10,0.15,0.20,0.25` with tolerance `0.01`; forced-down density is fixed and absolute Jaccard dynamicity is an outcome.
 - Formal runs use all three constellation profiles, 48 slices, and fixed direct-observation budgets.
 - Intra-plane links are immutable and no node may exceed four active ISLs.
 - Current-slice hidden truth is evaluation-only and never enters planner feedback.
