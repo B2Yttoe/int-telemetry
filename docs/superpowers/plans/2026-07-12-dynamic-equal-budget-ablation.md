@@ -309,7 +309,7 @@ Verify the report classifies each contribution and interaction CI as positive, n
 **Files:**
 - Modify: `7.11工作日志.md`
 - Modify: `INFOCOM_READINESS_AUDIT.md`
-- Modify: `EXPERIMENTS_2_TO_10_INDEX.md` and rename to `EXPERIMENTS_2_TO_11_INDEX.md`
+- Modify and extend the current formal experiment index to `EXPERIMENTS_2_TO_11_INDEX.md`
 - Modify: `README.md`
 - Create: `reports/_archive/experiment11-development-20260712/README.md`
 
@@ -331,7 +331,7 @@ Move Experiment 11 development-only outputs under `reports/_archive/experiment11
 
 - [ ] **Step 5: Final verification**
 
-Check UTF-8 encoding, root links, no stale `EXPERIMENTS_2_TO_10_INDEX.md` references, no running experiment process, formal manifest status, and all commands from Task 6.
+Check UTF-8 encoding, root links, no stale prior-index references, no running experiment process, formal manifest status, and all commands from Task 6.
 
 - [ ] **Step 6: Commit documentation**
 
