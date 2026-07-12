@@ -262,15 +262,38 @@ function interactionHtml(rows, variantLabels) {
   return `<div class="table-scroll"><table><thead><tr><th>星座</th><th>被移除机制组</th><th>指标</th><th>25%-0% 贡献差</th><th>95% CI</th><th>解释</th></tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
-function conclusionSummary(contributionRows, interactionRows) {
-  const classify = (rows, lowField, highField) => rows.reduce((counts, row) => {
+function classificationCounts(rows, lowField, highField) {
+  return rows.reduce((counts, row) => {
     counts[resultClass(row[lowField], row[highField])] += 1;
     return counts;
   }, { positive: 0, negative: 0, uncertain: 0 });
+}
+
+function conclusionSummary(contributionRows, interactionRows) {
   return {
-    contribution: classify(contributionRows, "contribution_ci95_low", "contribution_ci95_high"),
-    interaction: classify(interactionRows, "interaction_ci95_low", "interaction_ci95_high"),
+    contribution: classificationCounts(contributionRows, "contribution_ci95_low", "contribution_ci95_high"),
+    interaction: classificationCounts(interactionRows, "interaction_ci95_low", "interaction_ci95_high"),
   };
+}
+
+function tradeoffHtml(contributionRows, variantLabels) {
+  const qualityMetrics = new Set([
+    "cpu_mae", "queue_depth_mae", "energy_percent_mae", "node_mode_accuracy",
+    "link_utilization_mae", "link_status_accuracy", "invalid_probe_path_ratio",
+  ]);
+  const computeMetrics = new Set(["planning_wall_time_ms", "reconstruction_wall_time_ms"]);
+  const qualityRows = contributionRows.filter((row) => qualityMetrics.has(row.metric));
+  const computeRows = contributionRows.filter((row) => computeMetrics.has(row.metric));
+  const quality = classificationCounts(qualityRows, "contribution_ci95_low", "contribution_ci95_high");
+  const compute = classificationCounts(computeRows, "contribution_ci95_low", "contribution_ci95_high");
+  const methodRows = [...new Set(contributionRows.map((row) => row.ablation_method_id))].map((methodId) => {
+    const methodQuality = qualityRows.filter((row) => row.ablation_method_id === methodId);
+    const methodCompute = computeRows.filter((row) => row.ablation_method_id === methodId);
+    const q = classificationCounts(methodQuality, "contribution_ci95_low", "contribution_ci95_high");
+    const c = classificationCounts(methodCompute, "contribution_ci95_low", "contribution_ci95_high");
+    return `<tr><td>${escapeHtml(variantLabels.get(methodId) ?? methodId)}</td><td>${q.positive}</td><td>${q.negative}</td><td>${q.uncertain}</td><td>${c.negative}</td><td>${c.positive}</td></tr>`;
+  }).join("");
+  return `<section><h2>质量收益与计算代价</h2><p>质量指标与计算指标必须分开阅读。质量指标中共有 ${quality.positive} 项稳定正贡献、${quality.negative} 项稳定负贡献、${quality.uncertain} 项不确定；计算指标中有 ${compute.negative} 项稳定负贡献，通常表示启用机制增加了规划或重构时间，而不是状态重构退化。</p><table><thead><tr><th>机制组</th><th>质量正贡献</th><th>质量负贡献</th><th>质量不确定</th><th>增加计算代价</th><th>降低计算代价</th></tr></thead><tbody>${methodRows}</tbody></table><div class="callout">消融方法更快是预期的复杂度收益。判断机制是否值得保留，应同时查看它带来的 CPU、队列、电量、节点模式和链路状态质量改善，而不能把所有负贡献合并成“方案退化”。</div></section>`;
 }
 
 export function buildExperiment11Html({
@@ -284,7 +307,7 @@ export function buildExperiment11Html({
     ["link_utilization_mae", "链路利用率重构误差"],
     ["planning_wall_time_ms", "在线路径规划计算开销"],
   ].map(([metric, title]) => ciChart(aggregateRows, metric, title)).join("");
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>实验 11 动态等预算机制消融</title><style>body{margin:0;background:#f3f6f7;color:#18272e;font-family:"Microsoft YaHei",Arial,sans-serif}main{max-width:1540px;margin:auto;padding:28px}header{border-bottom:4px solid #006d77;padding-bottom:18px}section{background:#fff;border:1px solid #d6e0e3;margin:16px 0;padding:18px;border-radius:4px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(560px,1fr));gap:14px}.grid section{margin:0}svg{width:100%;height:auto}.axis{stroke:#6b7f87}.legend{display:flex;flex-wrap:wrap;gap:12px;margin:14px 0}.legend span{display:flex;align-items:center;font-size:12px}.legend i{width:10px;height:10px;margin-right:5px}.table-scroll{max-height:680px;overflow:auto;border:1px solid #d6e0e3}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #d6e0e3;padding:7px;text-align:right}th{position:sticky;top:0;background:#e7eff1;z-index:1}th:first-child,td:first-child,th:nth-child(3),td:nth-child(3),th:nth-child(4),td:nth-child(4){text-align:left}.heat.positive{background:#d7f2e3;color:#14532d}.heat.negative{background:#fee2e2;color:#991b1b}.heat.uncertain{background:#fef3c7;color:#854d0e}.callout{border-left:4px solid #d97706;padding:10px 14px;background:#fff8e8}.metric-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.metric-strip div{background:#e7eff1;padding:12px}.metric-strip strong{font-size:24px;display:block}@media(max-width:720px){main{padding:14px}.grid{grid-template-columns:1fr}.metric-strip{grid-template-columns:1fr}}</style></head><body><main><header><h1>实验 11：动态 LEO 环境下严格等实际字节预算的机制消融</h1><p>三种星座规模、0% 与 25% 受控拓扑扰动、${parameters.seed_count ?? 0} 个配对种子、六种机制配置。每个同场景变体共享第一阶段真值，并使用相同实际遥测硬上限。</p></header><section><h2>实验定义</h2><p>完整增强版依次移除五类机制组。对于误差和耗时，贡献定义为“消融值减完整值”；对于准确率，贡献定义为“完整值减消融值”。因此所有指标中，正值均表示保留该机制有益。</p><p>动态性交互效应定义为 25% 压力下贡献减去 0% 压力下贡献。正值表示该机制在高动态环境中更重要。</p><div class="callout">未使用的预算通过不携带观测信息的 padding 补齐。padding 计入网络字节与能耗，但不会增加覆盖率或改善重构结果。</div>${legendHtml(variants)}</section><section><h2>预算公平性</h2>${fairnessHtml(fairnessRows)}</section><section><h2>主要结论</h2><div class="metric-strip"><div><strong>${conclusions.contribution.positive}</strong>稳定正贡献</div><div><strong>${conclusions.contribution.negative}</strong>稳定负贡献</div><div><strong>${conclusions.contribution.uncertain}</strong>统计不确定</div></div><p>结论按星座规模、动态压力和指标逐项报告。稳定负贡献不会删除；置信区间跨 0 的结果不解释为优势。</p></section><div class="grid">${charts}</div><section><h2>机制贡献热力表</h2>${contributionHeatmap(contributionRows, labels)}</section><section><h2>动态性交互效应</h2><p>该表回答“某项机制是否因为 LEO 拓扑更动态而变得更有价值”，而不是只回答静态平均效果。</p>${interactionHtml(interactionRows, labels)}</section><section><h2>负结果与边界</h2><p>本实验是第一阶段仿真真值上的因果消融证据，不是 Starlink 运营商内部遥测。节点 CPU、电量与队列指标的可信度仍取决于第一阶段模型；严格等预算消除了网络字节差异，但 padding 比例较高时说明方法没有充分利用可用预算。</p><p>贡献统计共 ${contributionRows.length} 项，其中 ${conclusions.contribution.negative} 项稳定为负；交互统计共 ${interactionRows.length} 项，其中 ${conclusions.interaction.negative} 项在高动态条件下表现更差。所有结果均保留在 CSV。</p></section></main></body></html>`;
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>实验 11 动态等预算机制消融</title><style>body{margin:0;background:#f3f6f7;color:#18272e;font-family:"Microsoft YaHei",Arial,sans-serif}main{max-width:1540px;margin:auto;padding:28px}header{border-bottom:4px solid #006d77;padding-bottom:18px}section{background:#fff;border:1px solid #d6e0e3;margin:16px 0;padding:18px;border-radius:4px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(560px,1fr));gap:14px}.grid section{margin:0}svg{width:100%;height:auto}.axis{stroke:#6b7f87}.legend{display:flex;flex-wrap:wrap;gap:12px;margin:14px 0}.legend span{display:flex;align-items:center;font-size:12px}.legend i{width:10px;height:10px;margin-right:5px}.table-scroll{max-height:680px;overflow:auto;border:1px solid #d6e0e3}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #d6e0e3;padding:7px;text-align:right}th{position:sticky;top:0;background:#e7eff1;z-index:1}th:first-child,td:first-child,th:nth-child(3),td:nth-child(3),th:nth-child(4),td:nth-child(4){text-align:left}.heat.positive{background:#d7f2e3;color:#14532d}.heat.negative{background:#fee2e2;color:#991b1b}.heat.uncertain{background:#fef3c7;color:#854d0e}.callout{border-left:4px solid #d97706;padding:10px 14px;background:#fff8e8}.metric-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.metric-strip div{background:#e7eff1;padding:12px}.metric-strip strong{font-size:24px;display:block}@media(max-width:720px){main{padding:14px}.grid{grid-template-columns:1fr}.metric-strip{grid-template-columns:1fr}}</style></head><body><main><header><h1>实验 11：动态 LEO 环境下严格等实际字节预算的机制消融</h1><p>三种星座规模、0% 与 25% 受控拓扑扰动、${parameters.seed_count ?? 0} 个配对种子、六种机制配置。每个同场景变体共享第一阶段真值，并使用相同实际遥测硬上限。</p></header><section><h2>实验定义</h2><p>完整增强版依次移除五类机制组。对于误差和耗时，贡献定义为“消融值减完整值”；对于准确率，贡献定义为“完整值减消融值”。因此所有指标中，正值均表示保留该机制有益。</p><p>动态性交互效应定义为 25% 压力下贡献减去 0% 压力下贡献。正值表示该机制在高动态环境中更重要。</p><div class="callout">未使用的预算通过不携带观测信息的 padding 补齐。padding 计入网络字节与能耗，但不会增加覆盖率或改善重构结果。</div>${legendHtml(variants)}</section><section><h2>预算公平性</h2>${fairnessHtml(fairnessRows)}</section><section><h2>主要结论</h2><div class="metric-strip"><div><strong>${conclusions.contribution.positive}</strong>稳定正贡献</div><div><strong>${conclusions.contribution.negative}</strong>稳定负贡献</div><div><strong>${conclusions.contribution.uncertain}</strong>统计不确定</div></div><p>结论按星座规模、动态压力和指标逐项报告。稳定负贡献不会删除；置信区间跨 0 的结果不解释为优势。</p></section>${tradeoffHtml(contributionRows, labels)}<div class="grid">${charts}</div><section><h2>机制贡献热力表</h2>${contributionHeatmap(contributionRows, labels)}</section><section><h2>动态性交互效应</h2><p>该表回答“某项机制是否因为 LEO 拓扑更动态而变得更有价值”，而不是只回答静态平均效果。</p>${interactionHtml(interactionRows, labels)}</section><section><h2>负结果与边界</h2><p>本实验是第一阶段仿真真值上的因果消融证据，不是 Starlink 运营商内部遥测。节点 CPU、电量与队列指标的可信度仍取决于第一阶段模型；严格等预算消除了网络字节差异，但 padding 比例较高时说明方法没有充分利用可用预算。</p><p>贡献统计共 ${contributionRows.length} 项，其中 ${conclusions.contribution.negative} 项稳定为负；交互统计共 ${interactionRows.length} 项，其中 ${conclusions.interaction.negative} 项在高动态条件下表现更差。所有结果均保留在 CSV。</p></section></main></body></html>`;
 }
 
 function buildExperiment11Markdown({ contributionRows, interactionRows, fairnessRows, parameters, outputs }) {

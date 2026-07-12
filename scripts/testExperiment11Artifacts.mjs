@@ -63,7 +63,7 @@ assert.ok(summary.fairness_rows.every((row) => Number(row.actual_bytes_per_node_
 const htmlPath = artifactPath(inputDir, manifest.outputs.report_html);
 assert.ok(existsSync(htmlPath), `Missing Experiment 11 artifact: ${htmlPath}`);
 const html = readFileSync(htmlPath, "utf8");
-for (const marker of ["主要结论", "动态性交互效应", "负结果与边界", "预算公平性"]) {
+for (const marker of ["主要结论", "质量收益与计算代价", "动态性交互效应", "负结果与边界", "预算公平性"]) {
   assert.ok(html.includes(marker), `Experiment 11 HTML is missing section: ${marker}`);
 }
 assert.ok(!html.includes("\uFFFD"), "Experiment 11 HTML contains Unicode replacement characters");
