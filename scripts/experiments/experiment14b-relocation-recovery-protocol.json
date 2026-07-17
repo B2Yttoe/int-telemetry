@@ -1,0 +1,23 @@
+{
+  "schema": "int-telemetry-experiment14b-relocation-recovery/v1",
+  "status": "frozen-before-gp1-and-strict-external-source-completion",
+  "purpose": "Preserve the original Experiment 14B freeze after the project-directory rename and prevent a later source refresh from replacing the immutable GP0 lock.",
+  "parent_experiment_id": "experiment14b-prospective-external-validation",
+  "rules": {
+    "locked_gp0_has_priority": true,
+    "verify_all_locked_artifact_hashes": true,
+    "allow_gp0_regeneration": false,
+    "allow_model_parameter_updates": false,
+    "gp1_must_be_acquired_after_parent_not_before": true,
+    "gp1_must_use_same_source_family": true,
+    "gp1_must_differ_from_gp0": true,
+    "radar_or_ripe_proxy_may_not_satisfy_strict_gates": true
+  },
+  "retention": {
+    "maximum_logical_orbit_snapshots": 2,
+    "roles": [
+      "GP0-model-input",
+      "GP1-blind-future-reference"
+    ]
+  }
+}

@@ -618,7 +618,46 @@ npm run int:experiment -- --tasks examples/datasets/stage1-standard-traffic.csv 
 npm run int:align -- --run stage2-int/runs/leo-int-mc
 ```
 
-## 10. 当前边界
+## 10. OAM 目标感知复测与统一观测损失门控
+
+增强版把 OAM 强制复测从“命中目标就整条路径全量采集”拆成目标去重、差异化 metadata 和观测损失门控三个环节。
+
+对候选路径 \(p\)，先计算其相对于已覆盖目标集合 \(C\) 的边际 OAM 目标：
+
+\[
+\Delta R(p)=R(p)\setminus C
+\]
+
+只有 \(\Delta R(p)\neq\varnothing\) 的路径才获得强制目标收益；如果路径没有新增活动链路、没有新增 OAM 目标，也没有关键风险，则抑制仅重复命中同一目标的候选路径。该机制避免相同复测目标被多条路径重复计费，但不会删除真正带来新增链路观测的路径。
+
+运行时把 probe hop 分为两类：
+
+- 目标记录使用 96 B metadata，保留重构所需的完整状态；
+- 纯中继记录使用 88 B metadata，避免沿途重复携带与本次复测无关的字段。
+
+是否进一步把邻接采集从 `all-adjacent` 收缩为 `target-neighborhood`，由统一的预计观测损失率决定：
+
+\[
+r_{loss}(p)=\frac{3|V(p)|}{|E_{active}|}
+\]
+
+其中 \(|V(p)|\) 是 probe 路径节点数，\(|E_{active}|\) 是当前时间片活动链路数，系数 3 是对每个路径节点可能损失的非目标邻接观测数量的保守上界。当 \(r_{loss}>0.1\) 时保留 `all-adjacent`；否则使用 `target-neighborhood`，只扫描强制复测目标附近的链路。该判据不依赖星座名称或人工的小/中/大规模分支，而是由当前拓扑规模和路径局部性自动决定。
+
+正式 48 时间片实验的每节点每时间片遥测字节结果如下：
+
+| 星座 | 原生 INT-MC | 当前增强版 | OAM 优化版 | 相对原生变化 |
+| --- | ---: | ---: | ---: | ---: |
+| Iridium 6x11 | 517.2121 B | 457.6679 B | 456.3800 B | -11.76% |
+| Telesat 27x13 | 454.9858 B | 385.1478 B | 385.7642 B | -15.21% |
+| Starlink 72x22 | 23.9419 B | 24.5480 B | 19.0395 B | -20.48% |
+
+严格验收以优化前“当前增强版”的质量指标为冻结参考：CPU、队列、电量和链路利用率 MAE 的退化不超过 1%，节点模式与链路状态准确率下降不超过 0.1 个百分点。三种规模均通过门限。大型 Starlink 上目标邻域采集抑制了 2507 次无关邻接扫描；中小规模预计观测损失较高，因而自动保留全邻接观测，其质量指标没有退化。
+
+主要审计字段包括 `oam_duplicate_target_only_suppressed_paths`、`unique_mandatory_oam_targets_covered`、`runtime_target_aware_probe_paths`、`runtime_target_aware_suppressed_adjacent_scans`、`runtime_target_metadata_hop_records`、`runtime_transit_metadata_hop_records` 和 `runtime_target_aware_metadata_bytes_saved`。
+
+需要注意：正式增强对比沿用既有混合反馈口径，以便隔离 OAM 机制变化。其中 Ground OAM 反馈可部署，而使用第一阶段误差生成的优先复测反馈属于 oracle 上界；后续部署实验必须单独报告 Ground-OAM-only 结果，不能把 oracle 反馈解释为非全知遥测能力。
+
+## 11. 当前边界
 
 当前实现属于算法级和遥测记录级改造，还不是 P4/Tofino/ns-3 逐包仿真。它适合用于比较：
 
@@ -634,3 +673,17 @@ npm run int:align -- --run stage2-int/runs/leo-int-mc
 - 有无空间先验矩阵补全；
 - 有无 Ground OAM stale-carryover；
 - 有无能耗约束和低电量降频。
+
+## 12. 重要性感知路径与选择性 metadata
+
+当前新增机制不替换增强 LEO-INT-MC 的基础 probe plan，而是把路径集合写成：
+
+\[
+P_t=P_t^{base}\cup P_t^{repair}
+\]
+
+`repair` 只服务于 Ground OAM 强制目标、已经产生的 AoI 债务或具有强滞后临界度证据的对象，并受独立字节储备约束。规划只读取目标时间片之前的 Ground OAM、已知业务路由和可预测接触状态；第一阶段真值仍然只用于运行结束后的误差评价。
+
+路径上的节点继续正常转发 probe，但按 `node-full`、`node-core`、`link-full`、`link-core`、`link-light` 或 `forward-only` 档位决定是否写入 metadata。路径到达目标链路任一端点时，还允许报告明确点名的本地端口状态；该规则不会扫描同一节点的其他相邻链路。所有目标 mask、probe、报告和实际写入字段均进入总字节口径，省下的不是单纯路径规划时间，而是网络实际承载的遥测字节。
+
+两组短回放中，实际总字节分别下降 16.82% 和 9.42%，全局与关键对象误差未退化；异常正样本充分的 64 节点高负载场景中，异常宏召回从 0.9795 提升至 0.9897。详细公式、产物路径、适用边界和复现命令见 `project-docs/IMPORTANCE_AWARE_SELECTIVE_TELEMETRY_PILOT.md`。48 时间片、多种子和三种正式星座统计仍属于待完成的正式验证，不能由短回放替代。

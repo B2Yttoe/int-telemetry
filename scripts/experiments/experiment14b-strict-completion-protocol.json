@@ -1,0 +1,27 @@
+{
+  "schema": "int-telemetry-experiment14b-strict-completion/v1",
+  "status": "pre-registered-before-prospective-windows-complete",
+  "minimum_exact_ripe_pairs": 20,
+  "required": {
+    "parent_freeze_integrity": true,
+    "fresh_orbit_age_gate": true,
+    "future_orbit_validation": true,
+    "mlab_train_test_uuid_overlap": 0,
+    "mlab_test_targets_used_for_fit": 0,
+    "metric_specific_mlab_validation": true,
+    "radar_prospective_test_complete": true,
+    "radar_timestamp_overlap": 0,
+    "ripe_collection_semantics": "complete-exact-anchor",
+    "ripe_server_location_source": "direct-measurement-target-coordinate",
+    "ripe_temporal_pairing": "exact-topology-window",
+    "ns3_evidence_status": "ns3-system-cross-validation-complete",
+    "internal_state_claim_boundary_documented": true
+  },
+  "non_sufficient_evidence": [
+    "complete-public-proxy RIPE Atlas fallback",
+    "representative-periodic-phase historical M-Lab pairing",
+    "throughput-filtered file used as the primary RTT holdout",
+    "internal CPU, energy, or queue self-consistency alone"
+  ],
+  "completion_rule": "Every required check must pass. Pending sources keep the experiment in progress; proxy evidence cannot promote the strict evidence status to complete."
+}

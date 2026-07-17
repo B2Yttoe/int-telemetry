@@ -7,7 +7,6 @@ const validProfiles = new Set(["empty", "low-load", "normal", "high-load", "hots
 const validOrbitModels = new Set(["analytic-walker", "tle-sgp4", "real-tle-sgp4"]);
 const validModes = new Set(["autonomous", "operational"]);
 const validRouting = new Set(["shortest-path", "congestion-aware-shortest-path"]);
-
 function argValue(args, name, fallback) {
   const index = args.indexOf(name);
   if (index === -1) return fallback;
@@ -30,7 +29,10 @@ const mode = argValue(args, "--mode", "operational");
 const routingAlgorithm = argValue(args, "--routing", "congestion-aware-shortest-path");
 const tasksPath = argValue(args, "--tasks", "");
 const tleSnapshotPath = argValue(args, "--tle-snapshot", "");
+const linkOutageSchedulePath = argValue(args, "--link-outage-schedule", "");
+const constellationProfileId = argValue(args, "--constellation-profile", "");
 const slicesOverride = argValue(args, "--slices", "");
+const epochIsoOverride = argValue(args, "--epoch-iso", "");
 const outDir = resolve(argValue(args, "--out", `exports/${profile}-${orbitModel}`));
 const includeFullJson = hasArg(args, "--full-json");
 
@@ -42,13 +44,16 @@ if (!validRouting.has(routingAlgorithm)) fail(`Unknown --routing ${routingAlgori
 const taskFileName = tasksPath ? basename(tasksPath) : "";
 const taskText = tasksPath ? await readFile(tasksPath, "utf8") : "";
 const tleSnapshotText = tleSnapshotPath ? await readFile(tleSnapshotPath, "utf8") : "";
+const linkOutageScheduleText = linkOutageSchedulePath ? await readFile(linkOutageSchedulePath, "utf8") : "";
 const timeSlices = slicesOverride ? Number(slicesOverride) : undefined;
+const epochIso = epochIsoOverride ? new Date(epochIsoOverride).toISOString() : undefined;
 const effectiveProfile = tasksPath ? "uploaded" : profile;
 const datasetName = tasksPath ? `${taskFileName}` : `scenario:${profile}`;
-const effectiveOrbitModel = tleSnapshotPath ? "real-tle-sgp4" : orbitModel;
+const effectiveOrbitModel = tleSnapshotPath || constellationProfileId ? "real-tle-sgp4" : orbitModel;
 
 const entry = `
   import { walkerNetworkConfig } from "./src/config/walkerNetworkConfig.ts";
+  import { constellationProfiles } from "./src/config/constellationProfiles.ts";
   import { generateWalkerNetwork } from "./src/simulation/walker.ts";
   import {
     experimentJson,
@@ -60,22 +65,43 @@ const entry = `
     rowsToCsv,
     taskTraceRows,
   } from "./src/simulation/export.ts";
+
+  const validControlledOutageSchemas = new Set([
+    "int-telemetry-controlled-link-outage/v1",
+    "int-temerity-controlled-link-outage/v1",
+  ]);
   import { effectiveTrafficTasks, parseTaskDataset, validateTaskDataset } from "./src/simulation/traffic.ts";
   import { verifyRealTleSnapshot } from "./src/simulation/realTleCatalog.ts";
 
   export function createScenarioExport(options) {
-    const tleCatalogSnapshot = options.tleSnapshotText ? JSON.parse(options.tleSnapshotText) : undefined;
+    const constellationProfile = options.constellationProfileId
+      ? constellationProfiles.find((item) => item.id === options.constellationProfileId)
+      : undefined;
+    if (options.constellationProfileId && !constellationProfile) {
+      return {
+        ok: false,
+        validation: {
+          accepted: 0,
+          warnings: [],
+          errors: ["Unknown --constellation-profile " + options.constellationProfileId],
+        },
+      };
+    }
+    const tleCatalogSnapshot = options.tleSnapshotText
+      ? JSON.parse(options.tleSnapshotText)
+      : constellationProfile?.snapshot;
     if (tleCatalogSnapshot) {
       const verification = verifyRealTleSnapshot(tleCatalogSnapshot);
       if (!verification.ok) {
         return { ok: false, validation: { accepted: 0, warnings: [], errors: verification.errors } };
       }
     }
+    const baseConfig = constellationProfile?.config ?? walkerNetworkConfig;
     const baseRuntimeConfig = tleCatalogSnapshot
       ? {
-          ...walkerNetworkConfig,
+          ...baseConfig,
           constellation: {
-            ...walkerNetworkConfig.constellation,
+            ...baseConfig.constellation,
             shellId: tleCatalogSnapshot.shell_id,
             planes: tleCatalogSnapshot.layout.planes,
             satellitesPerPlane: tleCatalogSnapshot.layout.satellites_per_plane,
@@ -83,27 +109,45 @@ const entry = `
             inclinationDeg: tleCatalogSnapshot.mean_inclination_deg,
           },
           orbit: {
-            ...walkerNetworkConfig.orbit,
+            ...baseConfig.orbit,
             model: "real-tle-sgp4",
             tleCatalog: {
-              ...walkerNetworkConfig.orbit.tleCatalog,
+              ...baseConfig.orbit.tleCatalog,
               source: tleCatalogSnapshot.source,
             },
           },
         }
-      : walkerNetworkConfig;
-    const runtimeConfig = options.timeSlices
+      : baseConfig;
+    const runtimeConfig = options.timeSlices || options.epochIso
       ? {
           ...baseRuntimeConfig,
           time: {
             ...baseRuntimeConfig.time,
-            slices: options.timeSlices,
+            ...(options.timeSlices ? { slices: options.timeSlices } : {}),
+            ...(options.epochIso ? { epochIso: options.epochIso } : {}),
           },
         }
       : baseRuntimeConfig;
     const tasks = options.taskText
       ? parseTaskDataset(options.taskText, options.taskFileName)
       : [];
+    const controlledLinkOutageSchedule = options.linkOutageScheduleText
+      ? JSON.parse(options.linkOutageScheduleText)
+      : undefined;
+    if (controlledLinkOutageSchedule && (
+      !validControlledOutageSchemas.has(controlledLinkOutageSchedule.schema_version) ||
+      controlledLinkOutageSchedule.reason !== "experiment8-controlled-dynamicity" ||
+      typeof controlledLinkOutageSchedule.forced_down_link_ids_by_slice !== "object"
+    )) {
+      return {
+        ok: false,
+        validation: {
+          accepted: 0,
+          warnings: [],
+          errors: ["Invalid controlled link outage schedule"],
+        },
+      };
+    }
     const effectiveTasks = effectiveTrafficTasks(runtimeConfig, options.profile, tasks);
     const validation = validateTaskDataset(effectiveTasks, runtimeConfig);
     if (validation.errors.length > 0) {
@@ -117,6 +161,7 @@ const entry = `
       orbitModel,
       routingAlgorithm: options.routingAlgorithm,
       tleCatalogSnapshot,
+      controlledLinkOutageSchedule,
     });
     const context = {
       simulationMode: options.mode,
@@ -140,6 +185,15 @@ const entry = `
       validation,
       metadata,
       tleCatalogSnapshot,
+      constellationProfile: constellationProfile
+        ? {
+            id: constellationProfile.id,
+            label: constellationProfile.label,
+            short_label: constellationProfile.shortLabel,
+            scale: constellationProfile.scale,
+            operator: constellationProfile.operator,
+          }
+        : null,
       counts: {
         slices: slices.length,
         nodes: nodes.length,
@@ -185,10 +239,13 @@ try {
     mode,
     profile: effectiveProfile,
     orbitModel,
+    constellationProfileId,
     tleSnapshotText,
     timeSlices,
+    epochIso,
     routingAlgorithm,
     taskText,
+    linkOutageScheduleText,
     taskFileName,
     datasetName,
     includeFullJson,
@@ -213,6 +270,8 @@ console.log(
       outDir,
       profile: effectiveProfile,
       orbitModel: effectiveOrbitModel,
+      constellationProfileId: constellationProfileId || undefined,
+      epochIso: epochIso || undefined,
       tleSnapshot: tleSnapshotPath || undefined,
       mode,
       routingAlgorithm,
@@ -224,6 +283,7 @@ console.log(
       },
       validation: exported.validation,
       counts: exported.counts,
+      constellationProfile: exported.constellationProfile,
       files: Object.keys(exported.files),
     },
     null,

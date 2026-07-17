@@ -16,8 +16,12 @@ import {
   Thermometer,
   Unlock,
 } from "lucide-react";
-import { walkerNetworkConfig } from "./config/walkerNetworkConfig";
-import realStarlinkMainShell8x8Snapshot from "../data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json";
+import {
+  constellationProfiles,
+  defaultConstellationProfileId,
+  getConstellationProfile,
+  type ConstellationProfileId,
+} from "./config/constellationProfiles";
 import OrbitalScene from "./components/OrbitalScene";
 import PlanarTopology from "./components/PlanarTopology";
 import TelemetrySimulationPage from "./components/TelemetrySimulationPage";
@@ -44,12 +48,12 @@ import type {
   NodeMode,
   NodeType,
   OrbitModel,
-  RealTleCatalogSnapshot,
   RoutedTaskPath,
   RoutingAlgorithm,
   SimulationMode,
   TaskTrafficRecord,
   TrafficProfile,
+  WalkerNetworkConfig,
 } from "./simulation/types";
 
 const nodeStatusLabel: Record<NodeMode, string> = {
@@ -133,6 +137,9 @@ type Selection =
 type PanelKey = "overview" | "topology" | "details" | "tables";
 type PageKey = "dashboard" | "telemetry";
 
+const DASHBOARD_MEDIUM_PROFILE_SLICE_LIMIT = 12;
+const DASHBOARD_LARGE_PROFILE_SLICE_LIMIT = 4;
+
 function restrictionReasonText(reason: LinkRestrictionReason) {
   if (reason === "distance-threshold") return "距离超过阈值";
   if (reason === "polar-region") return "极地区域限制";
@@ -142,6 +149,7 @@ function restrictionReasonText(reason: LinkRestrictionReason) {
   if (reason === "solar-interference") return "太阳规避角触发";
   if (reason === "link-budget") return "链路预算不足";
   if (reason === "capacity-limit") return "容量低于门限";
+  if (reason === "experiment8-controlled-dynamicity") return "实验受控断链";
   return "地球遮挡";
 }
 
@@ -464,11 +472,13 @@ function TruthSummaryPanel({
   datasetMessage,
   metadata,
   summary,
+  config,
 }: {
   datasetName: string;
   datasetMessage: string;
   metadata: ReturnType<typeof experimentMetadata>;
   summary: ReturnType<typeof truthSummaryValue>;
+  config: WalkerNetworkConfig;
 }) {
   const items = [
     {
@@ -504,7 +514,7 @@ function TruthSummaryPanel({
     {
       label: "电池能量范围",
       value: `${summary.minEnergyWh.toFixed(0)}-${summary.maxEnergyWh.toFixed(0)} Wh`,
-      tone: summary.minEnergyWh > walkerNetworkConfig.operationalModel.minStateOfCharge * walkerNetworkConfig.operationalModel.batteryCapacityWh ? "good" : "warn",
+      tone: summary.minEnergyWh > config.operationalModel.minStateOfCharge * config.operationalModel.batteryCapacityWh ? "good" : "warn",
     },
     {
       label: "最大 CPU / 转发",
@@ -1161,18 +1171,38 @@ function NodeMatrix({ slice, onSelect }: { slice: NetworkSlice; onSelect: (selec
 
 export default function App() {
   const [page, setPage] = useState<PageKey>("dashboard");
+  const [constellationProfileId, setConstellationProfileId] =
+    useState<ConstellationProfileId>(defaultConstellationProfileId);
   const [simulationMode, setSimulationMode] = useState<SimulationMode>("operational");
-  const [orbitModel, setOrbitModel] = useState<OrbitModel>("tle-sgp4");
-  const [routingAlgorithm, setRoutingAlgorithm] = useState<RoutingAlgorithm>(walkerNetworkConfig.routing.algorithm);
+  const [orbitModel, setOrbitModel] = useState<OrbitModel>("real-tle-sgp4");
+  const defaultProfile = getConstellationProfile(defaultConstellationProfileId);
+  const [routingAlgorithm, setRoutingAlgorithm] = useState<RoutingAlgorithm>(defaultProfile.config.routing.algorithm);
   const [trafficProfile, setTrafficProfile] = useState<TrafficProfile>("normal");
   const [tasks, setTasks] = useState<TaskTrafficRecord[]>([]);
   const [datasetName, setDatasetName] = useState("场景：正常业务");
   const [datasetMessage, setDatasetMessage] = useState("使用内置确定性业务模板");
-  const tleCatalogSnapshot =
-    orbitModel === "real-tle-sgp4" ? (realStarlinkMainShell8x8Snapshot as RealTleCatalogSnapshot) : undefined;
+  const constellationProfile = useMemo(() => getConstellationProfile(constellationProfileId), [constellationProfileId]);
+  const dashboardSliceLimit =
+    constellationProfile.scale === "large"
+      ? DASHBOARD_LARGE_PROFILE_SLICE_LIMIT
+      : constellationProfile.scale === "medium"
+        ? DASHBOARD_MEDIUM_PROFILE_SLICE_LIMIT
+        : constellationProfile.config.time.slices;
+  const dashboardPreviewLimited = constellationProfile.config.time.slices > dashboardSliceLimit;
+  const activeConfig = useMemo<WalkerNetworkConfig>(() => {
+    if (!dashboardPreviewLimited) return constellationProfile.config;
+    return {
+      ...constellationProfile.config,
+      time: {
+        ...constellationProfile.config.time,
+        slices: dashboardSliceLimit,
+      },
+    };
+  }, [constellationProfile, dashboardPreviewLimited, dashboardSliceLimit]);
+  const tleCatalogSnapshot = orbitModel === "real-tle-sgp4" ? constellationProfile.snapshot : undefined;
   const slices = useMemo(
     () =>
-      generateWalkerNetwork(walkerNetworkConfig, {
+      generateWalkerNetwork(activeConfig, {
         mode: simulationMode,
         tasks,
         trafficProfile,
@@ -1180,7 +1210,7 @@ export default function App() {
         routingAlgorithm,
         tleCatalogSnapshot,
       }),
-    [simulationMode, tasks, trafficProfile, orbitModel, routingAlgorithm, tleCatalogSnapshot],
+    [activeConfig, simulationMode, tasks, trafficProfile, orbitModel, routingAlgorithm, tleCatalogSnapshot],
   );
   const [snapshotIndex, setSnapshotIndex] = useState<number | null>(null);
   const [motionSliceIndex, setMotionSliceIndex] = useState(0);
@@ -1202,8 +1232,8 @@ export default function App() {
   const truthSummary = useMemo(() => truthSummaryValue(slices), [slices]);
   const snapshotMode = snapshotIndex !== null;
   const effectiveTasks = useMemo(
-    () => effectiveTrafficTasks(walkerNetworkConfig, trafficProfile, tasks),
-    [tasks, trafficProfile],
+    () => effectiveTrafficTasks(activeConfig, trafficProfile, tasks),
+    [activeConfig, tasks, trafficProfile],
   );
   const exportContext = useMemo(
     () => ({
@@ -1212,13 +1242,14 @@ export default function App() {
       orbitModel,
       routingAlgorithm,
       datasetName,
-      configSnapshot: walkerNetworkConfig,
+      configSnapshot: activeConfig,
       taskRecords: effectiveTasks,
+      tleCatalogSnapshot,
     }),
-    [datasetName, effectiveTasks, orbitModel, routingAlgorithm, simulationMode, trafficProfile],
+    [activeConfig, datasetName, effectiveTasks, orbitModel, routingAlgorithm, simulationMode, trafficProfile, tleCatalogSnapshot],
   );
   const exportMetadata = useMemo(() => experimentMetadata(exportContext, slices), [exportContext, slices]);
-  const exportBaseName = `walker-${safeFilePart(trafficProfileLabel[trafficProfile])}-${safeFilePart(orbitModelLabel[orbitModel])}-${safeFilePart(datasetName)}`;
+  const exportBaseName = `walker-${safeFilePart(constellationProfile.shortLabel)}-${safeFilePart(trafficProfileLabel[trafficProfile])}-${safeFilePart(orbitModelLabel[orbitModel])}-${safeFilePart(datasetName)}`;
 
   const handleExport = (
     kind: "json" | "nodes" | "links" | "routes" | "metrics" | "task-trace" | "link-impact" | "node-impact",
@@ -1263,7 +1294,7 @@ export default function App() {
     const text = await file.text();
     try {
       const parsedTasks = parseTaskDataset(text, file.name);
-      const validation = validateTaskDataset(parsedTasks, walkerNetworkConfig);
+      const validation = validateTaskDataset(parsedTasks, constellationProfile.config);
       if (validation.errors.length > 0) {
         setTasks([]);
         setDatasetName("校验失败");
@@ -1291,6 +1322,16 @@ export default function App() {
     }, 1600);
     return () => window.clearInterval(timer);
   }, [snapshotMode, slices.length]);
+
+  useEffect(() => {
+    const selectionExists =
+      selection.type === "node"
+        ? slice.nodes.some((node) => node.id === selection.id)
+        : slice.links.some((link) => link.id === selection.id);
+    if (!selectionExists && slice.nodes[0]) {
+      setSelection({ type: "node", id: slice.nodes[0].id });
+    }
+  }, [selection, slice]);
 
   const handleTimeSelect = (index: number) => {
     setSnapshotIndex(index);
@@ -1366,7 +1407,7 @@ export default function App() {
           </div>
           <div className="section-tools">
             <div className="section-status">
-              {simulationModeLabel[simulationMode]} · {trafficProfileLabel[trafficProfile]} · {orbitModelLabel[orbitModel]}
+              {constellationProfile.shortLabel} · {simulationModeLabel[simulationMode]} · {trafficProfileLabel[trafficProfile]} · {orbitModelLabel[orbitModel]}
             </div>
             <button
               type="button"
@@ -1423,6 +1464,32 @@ export default function App() {
             ))}
           </div>
           <div className="display-settings" aria-label="显示设置">
+            <div className="mode-switch constellation-switch" aria-label="星座模型">
+              {constellationProfiles.map((profile) => (
+                <button
+                  type="button"
+                  key={profile.id}
+                  className={constellationProfileId === profile.id ? "active" : ""}
+                  title={`${profile.sourceSummary} ${profile.architectureSummary}`}
+                  onClick={() => {
+                    setConstellationProfileId(profile.id);
+                    setOrbitModel("real-tle-sgp4");
+                    setSnapshotIndex(0);
+                    setMotionSliceIndex(0);
+                  }}
+                >
+                  {profile.label}
+                </button>
+              ))}
+            </div>
+            <div className="profile-note">
+              <strong>{constellationProfile.operator}</strong>
+              <span>{constellationProfile.sourceSummary}</span>
+              <span>{constellationProfile.experimentUse}</span>
+              {dashboardPreviewLimited ? (
+                <span>网页预览限制为前 {dashboardSliceLimit} 个时间片；完整 48 片请使用实验脚本导出。</span>
+              ) : null}
+            </div>
             <div className="mode-switch" aria-label="仿真模式">
               <button
                 type="button"
@@ -1640,6 +1707,7 @@ export default function App() {
           value={`${metrics.activeTasks}/${truthSummary.uniqueTaskCount}`}
           tone={simulationMode === "operational" && metrics.activeTasks ? "warn" : undefined}
         />
+        <StatTile icon={<Satellite size={20} />} label="星座模型" value={constellationProfile.shortLabel} />
         <StatTile icon={<Orbit size={20} />} label="轨道模型" value={orbitModelLabel[slice.orbitModel]} />
         <StatTile icon={<Activity size={20} />} label="路由算法" value={routingAlgorithmLabel[slice.routingAlgorithm]} />
         <StatTile icon={<Activity size={20} />} label="业务模式" value={trafficProfileLabel[trafficProfile]} />
@@ -1651,6 +1719,7 @@ export default function App() {
         datasetMessage={datasetMessage}
         metadata={exportMetadata}
         summary={truthSummary}
+        config={activeConfig}
       />
 
       </div>
@@ -1682,6 +1751,7 @@ export default function App() {
         <div className="visual-stack">
           <OrbitalScene
             slice={slice}
+            config={activeConfig}
             selection={selection}
             snapshotMode={snapshotMode}
             showOrbitPlanes={showOrbitPlanes}
@@ -1692,6 +1762,7 @@ export default function App() {
           <PlanarTopology
             slices={slices}
             slice={slice}
+            config={activeConfig}
             snapshotMode={snapshotMode}
             selection={selection}
             onSelect={setSelection}

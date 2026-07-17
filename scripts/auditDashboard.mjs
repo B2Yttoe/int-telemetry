@@ -167,7 +167,7 @@ try {
     has_truth_panel: Boolean(document.querySelector(".truth-panel")),
   }));
 
-  const expectedControls = ["真实运行", "最短路径", "正常业务", "TLE + SGP4"];
+  const expectedControls = ["小型：Iridium NEXT 6x11", "真实运行", "拥塞感知", "正常业务", "真实 TLE + SGP4"];
   const expectedExportButtons = [
     "完整 JSON",
     "节点 CSV",
@@ -187,10 +187,10 @@ try {
     ),
     "fingerprints are visible": desktop.fingerprints.every((item) => item.present && item.value.length > 0),
     "default normal dataset fingerprint is stable": desktop.fingerprints.some(
-      (item) => item.label === "数据集指纹" && item.value === "e875b03a",
+      (item) => item.label === "数据集指纹" && item.value === "0e78a16c",
     ),
     "default normal truth fingerprint is stable": desktop.fingerprints.some(
-      (item) => item.label === "真值指纹" && item.value === "6ce78ab7",
+      (item) => item.label === "真值指纹" && item.value === "8f8d0bae",
     ),
     "truth panel is present": desktop.has_truth_panel,
     "business trace export buttons are present": expectedExportButtons.every((button) =>

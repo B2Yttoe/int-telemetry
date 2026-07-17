@@ -1,6 +1,6 @@
-# INT-Temerity：LEO 卫星网络仿真与 INT 全网遥测实验平台
+# INT-Telemetry：LEO 卫星网络仿真与 INT 全网遥测实验平台
 
-本项目构建了一个面向 LEO 卫星网络的两阶段实验平台：
+本项目构建了一个面向 LEO 卫星网络的两阶段模型与第三阶段实验验证平台：
 
 1. **第一阶段：卫星网络真值仿真**  
    生成随时间片变化的 Walker-Star / Starlink-like 卫星网络，包括轨道、节点、链路、业务、能耗、链路预算和路由状态。
@@ -8,7 +8,10 @@
 2. **第二阶段：INT 带内网络遥测复现**  
    在第一阶段生成的动态网络上运行 `traffic-int` 和 `probe-int`，模拟 INT 报文逐跳采集节点与链路状态，并由 Ground OAM 在非全知视角下重构全网状态。
 
-项目当前的定位不是 ns-3 级逐包通信仿真器，而是一个 **中高层次、可解释、可复现实验的 LEO 网络状态生成与 INT 遥测验证平台**。它适合用于：
+3. **第三阶段：算法实验与包级交叉验证**
+   在大规模聚合实验之外，将冻结的 LEO 动态子场景导入 ns-3，独立验证 INT header、MTU、业务竞争、真实设备排队、报告交付和 Ground OAM AoI。
+
+项目主体仍是时间片级聚合仿真器，而不是把完整星座全部改造成 ns-3 逐包模型；实验 13 提供的是小规模、独立、可复现的包级系统交叉验证。整体定位是一个 **中高层次、可解释、可复现实验的 LEO 网络状态生成与 INT 遥测验证平台**。它适合用于：
 
 - 生成每个时间片下的卫星节点状态和链路状态；
 - 投喂业务数据集，观察业务对节点负载、链路拥塞和遥测结果的影响；
@@ -18,7 +21,7 @@
 ## 1. 当前根目录结构
 
 ```text
-INT-Temerity/
+INT-Telemetry/
   README.md                    当前项目总说明
   index.html                   Vite 前端入口
   package.json                 命令脚本与依赖
@@ -29,6 +32,7 @@ INT-Temerity/
 
   src/                         第一阶段仿真模型与前端仪表盘
   stage2-int/                  第二阶段 INT 遥测实验子系统
+  stage3-system-validation/    第三阶段 ns-3 包级交叉验证
   scripts/                     数据生成、校验、导出、验收脚本
   examples/                    示例业务数据集
   data/                        真实 TLE/OMM 快照等输入数据
@@ -97,7 +101,15 @@ LEO 卫星网络具有强动态性：
 | 合成 TLE + SGP4 | 保持 Walker 结构，同时使用 SGP4 传播位置。 |
 | 真实 TLE + SGP4 | 接入 CelesTrak GP/OMM 快照，使用真实公开轨道数据传播。 |
 
-当前默认交互星座仍保留 `8x8` 轻量 Walker-Star，适合仪表盘实时观察和快速验收；正式实验不再围绕 8x8 展开，而是默认使用 CelesTrak Starlink 主壳层 `72x22` 快照。需要更大规模压力对照时，可继续使用 `72x22` 快照。
+当前仪表盘已经提供三档星座模型切换。为了保证浏览器首屏稳定打开，网页默认加载小型 Iridium NEXT；切换到中型 Telesat-1015 时，前端默认预览前 12 个时间片；切换到大型 Starlink 时，前端默认只预览前 4 个时间片。正式实验仍可通过脚本运行完整 48 个时间片，实验脚本不受网页预览限制影响。
+
+| 规模 | 真实星座依据 | 当前模型规模 | 主要用途 |
+|---|---|---:|---|
+| 小型 | Iridium NEXT | `6x11 = 66` | 小规模 crosslinked Walker-Star、极区和 seam 约束、低开销遥测基线 |
+| 中型 | Telesat / Hypatia Telesat-1015 | `27x13 = 351` | 中规模传统 LEO 仿真 ISL 网络、INT-MC / CoSTCo 补全、覆盖率-开销实验 |
+| 大型 | Starlink 主实验壳层 | `72x22 = 1584` | 后续正式 INT / INT-MC / CoSTCo 大规模实验 |
+
+三档模型统一通过 CelesTrak GP/TLE 快照和 `real-tle-sgp4` 传播生成。Starlink `47x14`、`8x8` 等早期中间/轻量快照只作为历史开发产物保留，不再作为正式实验、调参或论文结果来源；需要缩短运行时间时，优先在三档正式规模上减少时间片数量。
 
 当前真实 TLE 快照示例位于：
 
@@ -108,8 +120,9 @@ data/tle-snapshots/
 常用快照包括：
 
 ```text
-celestrak-starlink-main-550km-53deg-walker-8x8.json      # 53°/550 km 主壳层轻量可视化
-celestrak-starlink-real-walker-72x22.json                # 当前公开 TLE 72x22 完整规模快照，约 43°/490 km
+celestrak-iridium-next-real-walker-6x11.json             # Iridium NEXT 小型 crosslinked Walker-Star
+synthetic-telesat-1015-hypatia-walker-27x13.json         # Telesat/Hypatia 中型 ISL 网络
+celestrak-starlink-real-walker-72x22.json                # Starlink 大型主实验网络
 ```
 
 ### 3.2 节点状态
@@ -179,9 +192,7 @@ examples/datasets/
 ```text
 stage1-standard-traffic.csv
 stage1-ml-48-traffic.csv
-radar-calibrated-starlink-main-8x8-48-traffic.csv
 radar-calibrated-starlink-72x22-48-traffic.csv
-real-starlink-main-8x8-ml-48-traffic.csv
 real-starlink-72x22-ml-48-traffic.csv
 ```
 
@@ -383,8 +394,20 @@ npm run verify:stage1:starlink
 用途：
 
 - 检查默认轻量星座是否采用 Starlink 主壳层近似高度/倾角；
-- 检查 CelesTrak Starlink 主壳层 `8x8`、主壳层 `72x22` 和最大规模对照 `72x22` 真实 TLE 快照是否可用；
+- 检查 Starlink 主壳层 `72x22` 真实 TLE 快照是否可用；
 - 实际导出 real-tle-sgp4 的三类小时间片真值，证明第一阶段既能对齐 `53°/550 km` 主壳层，也能运行更大规模真实公开快照。
+
+### 7.1.2 三档真实星座验收
+
+```bash
+npm run verify:constellations
+```
+
+用途：
+
+- 检查 Iridium NEXT `6x11`、Telesat-1015 `27x13`、Starlink `72x22` 三档快照是否可用；
+- 检查每档模型的节点数、轨道面/槽位映射和最小时间片拓扑是否可以生成；
+- 明确中型模型采用 Hypatia 传统 Telesat-1015 设计参数生成合成 TLE，以保证中等规模模型具备 ISL，可用于 INT/INT-MC 实验。
 
 ### 7.2 总体验收
 
@@ -399,7 +422,7 @@ npm run verify:goal
 - 检查 Ground OAM 重构；
 - 检查关键产物是否存在。
 
-当前正式实验默认输入为 Starlink 主壳层 `72x22` 真实 TLE 快照和 Radar 校准业务数据集。调试时可以追加 `--slices <N>` 缩短实验时间片；8x8 只建议作为 smoke test。
+当前正式实验默认输入为 Starlink 主壳层 `72x22` 真实 TLE 快照和 Radar 校准业务数据集。调试时可以追加 `--slices <N>` 缩短实验时间片。8x8 等早期轻量规模只保留为历史开发/本地 smoke 产物，不再作为实验部分的运行对象或结果来源。
 
 ### 7.3 校验业务数据集
 
@@ -495,11 +518,7 @@ npm run dataset:stage1:realistic
 - 导出 `nodes.csv`、`links.csv`、`routes.csv`、`metrics.csv` 和数据集 manifest；
 - 输出目录默认为 `exports/stage1-realistic-72x22-48/`。
 
-快速烟测可以使用更小的 8x8 快照：
-
-```bash
-npm run dataset:stage1:realistic -- --snapshot data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-8x8.json --slices 4 --out exports/stage1-realistic-smoke-main-8x8-4
-```
+正式实验不再运行 8x8 等早期轻量快照。需要缩短调试时间时，应优先在三种正式规模上使用 `--slices <N>` 减少时间片，而不是更换到非正式星座规模。
 
 ### 7.9 实验 1：基于外部公开数据的仿真真实性验证
 
@@ -509,6 +528,8 @@ npm run dataset:stage1:realistic -- --snapshot data/tle-snapshots/celestrak-star
 npm run generate:radar-traffic -- --snapshot data\tle-snapshots\celestrak-starlink-real-walker-72x22.json --profile traffic-calibration\cloudflare-radar-profile.json --radar-json reports\_archive\experiment1-pre-final-20260703-211932\experiment1-external-realism-72x22\external\cloudflare-radar\radar-as14593-traffic.json --radar-window latest --out reports\experiment1-satellite-data-authenticity\input\radar-fitted-traffic.csv --metadata-out reports\experiment1-satellite-data-authenticity\input\radar-fitted-traffic.metadata.json --slices 48
 
 npm run experiment:realism -- --out reports\experiment1-satellite-data-authenticity --snapshot data\tle-snapshots\celestrak-starlink-real-walker-72x22.json --tasks reports\experiment1-satellite-data-authenticity\input\radar-fitted-traffic.csv --slices 48 --radar-json reports\_archive\experiment1-pre-final-20260703-211932\experiment1-external-realism-72x22\external\cloudflare-radar\radar-as14593-traffic.json --radar-window latest --ripe-max-probes 16 --ripe-hours 4
+
+npm run experiment1:internal-plausibility -- --out reports\experiment1-satellite-data-authenticity
 ```
 
 正式实验使用 `72x22` 真实 TLE-SGP4 壳层快照和 Radar 原始时序驱动业务输入，输出目录：
@@ -517,7 +538,101 @@ npm run experiment:realism -- --out reports\experiment1-satellite-data-authentic
 reports/experiment1-satellite-data-authenticity/
 ```
 
-其中 `experiment1-research-report.html/md` 是研究级总结报告，`external-realism-report.html/json` 是自动外部对照报告；`user-facing-rtt-comparison.csv` 记录每个 RIPE 探针样本对应的时间片、接入卫星、区域网关、星间回退路径和模型用户侧 RTT。详细说明见 `project-docs/EXPERIMENT_1_SIMULATION_FIDELITY.md`。
+其中 `experiment1-research-report.html/md` 是研究级总结报告，`external-realism-report.html/json` 是自动外部对照报告；`experiment1-internal-state-plausibility.html/json` 是新增的内部状态可信性审计报告，用来验证 CPU、电量、队列、缓存等外部不可直接观测变量是否满足公式、边界和输入响应约束；`user-facing-rtt-comparison.csv` 记录每个 RIPE 探针样本对应的时间片、接入卫星、区域网关、星间回退路径和模型用户侧 RTT。详细说明见 `project-docs/EXPERIMENT_1_SIMULATION_FIDELITY.md`。
+
+### 7.10 实验 14B：前瞻式多源真实性验证
+
+实验 14B 用于补足实验 1 和实验 14 的证据边界。它先冻结代码、配置、参数和验证协议，再采集冻结时刻之后产生的外部数据，避免把已经看过的 Radar、RIPE 或轨道样本同时用于校准和验证。
+
+> 当前正式执行版本是 **UTC 校正 v2**，权威目录为 `reports/experiment14b-prospective-external-validation-v2-utc-corrected/`。第一次 v2 因无时区 OMM 历元在辅助逻辑中被按本地时区解析，已在任何未来测试值进入前退役；旧 v1 与已退役 v2 只能作为开发历史，不能作为最终真实性结论。完整运行顺序见 [`project-docs/EXPERIMENT_14B_V2_RUNBOOK.md`](project-docs/EXPERIMENT_14B_V2_RUNBOOK.md)。
+
+主要改进包括：
+
+- 自动获取 CelesTrak standard GP 与 supplemental GP，并对所选 72x22 壳层执行历元年龄门禁：中位年龄不超过 24 小时、P95 不超过 48 小时；
+- 用冻结后的未来 GP/SupGP 检验 SGP4 外推误差，区分沿轨、径向和法向误差；
+- 将模型输出改成与公开测量同口径的用户侧 RTT 和 NDT7 下载吞吐，不再拿星座内部任务时延直接对比用户 ping；
+- M-Lab 使用 2025 年 10 月样本训练、未暴露的 11 月样本盲测，并排除仓库此前使用过的 11 月 24 日数据；
+- Radar 只用冻结前 168 小时校准，冻结后 48 小时作为未来测试集；
+- RIPE Atlas 使用冻结后新测量；具备 API key 时创建固定目标的精确配对测量，否则只允许标记为代理证据；
+- 引用实验 13 的 ns-3 包级结果，对 INT header、MTU、排队、丢包和报告交付进行独立系统交叉验证；
+- CPU、电量、队列只验证守恒关系、物理边界和输入响应，不把它们声明为运营商真实遥测。
+
+UTC 校正 v2 的核心入口为：
+
+```powershell
+npm run experiment14b:v2:status
+npm run experiment14b:v2:verify
+npm run experiment14b:v2:final-evidence:audit
+```
+
+正式目录冻结在：
+
+```text
+reports/experiment14b-prospective-external-validation-v2-utc-corrected/
+```
+
+以下旧 v1 目录与命令仅保留为历史复现入口：
+
+```text
+reports/experiment14b-prospective-external-validation/
+```
+
+首次冻结与采集：
+
+```powershell
+npm run experiment14b:all
+```
+
+为 Radar 和 RIPE Atlas 提供凭据后，继续使用同一个冻结目录采集，不能重新冻结或根据测试结果修改参数：
+
+```powershell
+$env:CLOUDFLARE_API_TOKEN = "<Cloudflare Radar token>"
+$env:RIPE_ATLAS_API_KEY = "<RIPE Atlas API key>"
+npm run experiment14b:collect
+```
+
+当未来时间窗结束后重复执行 `npm run experiment14b:collect`，再运行：
+
+```powershell
+npm run experiment14b:score
+```
+
+也可以使用一次性续跑入口，它会先校验冻结清单，再依次采集和评分，并把 transcript 写入正式报告目录下的 `automation/`：
+
+```powershell
+npm run experiment14b:resume
+```
+
+当前工作机已登记四个 `INT-Telemetry-Experiment14B-*` 一次性计划任务，分别覆盖新鲜轨道输入、RIPE 窗口结束、24 小时轨道外推和 48 小时 Radar 窗口结束。计划任务不会绕过 API 凭据要求，也不会用合成数据替代缺失来源。
+
+轨道输入还受到独立生命周期门禁保护：冻结后的 HTTP 获取时间不够，standard GP 内容哈希必须与冻结前缓存不同，且最终选中 72x22 壳层的历元中位数至少向前推进 0.1 小时。首次通过年龄门禁并生成拓扑后，standard GP、Walker 快照、`nodes.csv` 和 `links.csv` 会写入不可刷新锁；后续任务只采集未来 GP、Radar 和 RIPE，不再重建或覆盖模型输入。相关命令为：
+
+```powershell
+npm run experiment14b:source:preflight
+npm run experiment14b:source:lock
+npm run experiment14b:source:remaining
+```
+
+每次续跑使用独立 Node 子进程，结束后由操作系统回收内存；不可变快照、CSV 和日志会增加磁盘占用，但不会在后续进程中累积为常驻内存。
+
+M-Lab 正式评分采用分指标外部文件：RTT 使用 `filtered_percentile_0.75` 延迟过滤月度文件，吞吐使用 `filtered_isolation_forest_0.75` 吞吐过滤月度文件。工程干跑发现，若直接用吞吐过滤文件中的附带延迟列作为 RTT 主证据，其测试样本仍包含秒级延迟尾部；因此补充协议在读取延迟专用盲测值之前完成冻结，只修正数据源口径，不改变物理路径模型、两项拟合参数或参数范围。相关命令为：
+
+```powershell
+npm run experiment14b:mlab:freeze
+npm run experiment14b:mlab:collect
+npm run experiment14b:mlab:score
+```
+
+最终完成状态由额外冻结的严格审计决定：
+
+```powershell
+npm run experiment14b:audit
+npm run experiment14b:verify
+```
+
+其中 `audit` 可以在采集中运行并列出通过/待完成/失败项；`verify` 只有在全部门禁通过时才返回成功。K-root anycast 公共代理、历史 M-Lab 的代表性轨道相位或内部 CPU/电量/队列自洽不能代替固定 RIPE anchor、精确时间和直接服务器坐标配对。
+
+当前报告中的 `pending` 是严格因果验证尚未到达采集时间或缺少凭据，不是实验失败，也不能被解释为验证通过。只有 manifest 的 `evidence_status` 变为完成状态，且轨道、Radar、RIPE、M-Lab 与 ns-3 各自满足预注册判据后，才可以引用完整外部真实性结论。M-Lab 历史数据能够做到用户地域和服务器地域配对，但没有同历元历史 TLE 时，只能按轨道周期相位配对；真正的精确时间配对由未来 Radar、RIPE 和 GP 验证承担。声明边界见 `project-docs/EXPERIMENT_14B_VALIDITY_BOUNDARIES.md`。
 
 ## 8. 仪表盘功能
 
@@ -560,8 +675,12 @@ reports/experiment1-satellite-data-authenticity/
 |---|---|---|
 | 第一阶段真值 | `exports/` | 节点、链路、路由、网络指标。 |
 | INT 实验结果 | `stage2-int/runs/` | hop records、reports、Ground OAM 重构。 |
+| ns-3 系统交叉验证 | `reports/experiment13-system-validation/` | 包级 MTU、排队、交付、AoI 与聚合模型对照。 |
+| 前瞻外部验证 | `reports/experiment14b-prospective-external-validation-v2-utc-corrected/` | 新鲜 GP/OMM、未来 GP1、M-Lab、Radar/RIPE、同口径用户性能和严格因果冻结链。 |
 | 验收报告 | `reports/` | 阶段验收和总体目标验收。 |
 | 前端构建 | `dist/` | 构建后的网页产物。 |
+
+实验 13 的环境、输入边界、命令和指标定义见 `stage3-system-validation/README.md`。
 
 ## 10. 数据真实性边界
 
@@ -577,7 +696,9 @@ reports/experiment1-satellite-data-authenticity/
 - 如果没有 Cloudflare Radar API token 或外部 CSV，业务流量只能称为公开统计特征校准，不等同于真实运营商内部流量；
 - 公开世界基本拿不到逐星 CPU、电池、队列和每条 ISL 的真实运营状态，这些字段是外部轨道/业务/性能约束后的仿真真值；
 - 链路预算和能耗模型是中高层抽象，不是硬件级射频链路仿真；
-- INT 过程是协议机制和状态采集逻辑复现，不是 P4/Tofino/ns-3 级逐包实现；
+- 第一、二阶段 INT 主实验仍是时间片级协议机制与状态采集复现；实验 13 只对冻结的 66 星、20 时间片子场景做 ns-3 包级交叉验证，不等同于完整星座的 P4/Tofino 或硬件实现；
+- 实验 14B 在未来数据窗完成前只能称为预注册、采集中证据，不能把 `pending` 项计入真实性评分；
+- M-Lab 历史样本在缺少同历元历史 GP 时采用轨道周期相位配对，因此它验证用户侧性能分布和地域/服务器条件，不证明逐条记录的历史卫星路径完全一致；
 - Ground OAM 的重构结果需要和第一阶段真值区分。
 
 因此，本项目适合称为：
@@ -606,7 +727,7 @@ reports/experiment1-satellite-data-authenticity/
    引入更多公开流量统计来源或真实业务 trace，用于校准任务生成器。
 
 4. **更严格协议级实现**  
-   如果需要与真实网络协议栈对齐，可进一步引入 ns-3、P4 或容器网络仿真。
+   当前已有经济型 ns-3 包级交叉验证；后续可增加 BMv2/P4 原型，或在计算资源允许时扩展 ns-3 子场景和随机种子，但不需要以逐包仿真替代大规模聚合主实验。
 
 ## 12. LEO-INT-MC 拓扑预测与效率折中
 
@@ -637,7 +758,22 @@ npm run int:experiment -- --tasks examples/datasets/radar-calibrated-starlink-72
 
 在最新 smoke run 中，48 个时间片下生成 5760 个链路样本，预测 contact plan 的 precision/recall/accuracy 均为 1，INT-MC 对 4971 个 active 链路样本完成 100% active-link completion，其中 3862 个来自直接 INT 观测，1109 个由矩阵补全推断得到。
 
-## 13. 文档归档
+## 13. 实验 4-7：LEO-INT-MC 机制验证
+
+实验 2-11 的当前正式结果、共享输入、证据角色和历史归档边界统一记录在 [实验 2-11 正式结果索引](EXPERIMENTS_2_TO_11_INDEX.md) 中。论文图表应只从该索引列出的正式目录生成。严格等实际字节预算的多种子结果见 [实验 10 报告](EXPERIMENT_10_EQUAL_BUDGET_REPORT.md)，动态等预算机制消融见 [实验 11 报告](EXPERIMENT_11_DYNAMIC_ABLATION_REPORT.md)，投稿证据边界见 [INFOCOM 审计](INFOCOM_READINESS_AUDIT.md)，本轮完整过程见 [7.11 工作日志](7.11工作日志.md)。
+
+实验 4-7 用于补足实验 2 的机制解释、完整开销、参数稳定性和部署合法性证据。正式实验均使用 Iridium 66、Telesat 351、Starlink 1584 三种规模和 48 个时间片。
+
+| 实验 | 研究问题 | 根目录报告 | 详细可视化 | 复现命令 |
+|---|---|---|---|---|
+| 实验 4：消融实验 | 各类 LEO 增强机制分别贡献了什么，是否存在负贡献或规模差异 | [EXPERIMENT_4_ABLATION_REPORT.md](EXPERIMENT_4_ABLATION_REPORT.md) | [HTML](reports/experiment4-leo-int-mc-ablation/experiment4-ablation-report.html) | `npm run experiment4:ablation` |
+| 实验 5：开销分解 | 遥测字节、ISL 承载、能耗、路径规划和补全计算分别占多少 | [EXPERIMENT_5_OVERHEAD_REPORT.md](EXPERIMENT_5_OVERHEAD_REPORT.md) | [HTML](reports/experiment5-overhead-decomposition/experiment5-overhead-report.html) | `npm run experiment5:overhead` |
+| 实验 6：采样率敏感性 | 5%-40% 采样率下，开销、误差、波动和 Pareto 折中是否稳定 | [EXPERIMENT_6_SAMPLING_SENSITIVITY_REPORT.md](EXPERIMENT_6_SAMPLING_SENSITIVITY_REPORT.md) | [HTML](reports/experiment6-sampling-sensitivity/experiment6-sampling-report.html) | `npm run experiment6:sampling` |
+| 实验 7：无真值泄漏合法性 | 规划是否读取隐藏真值或未来反馈，补全是否破坏观测值和物理掩码 | [EXPERIMENT_7_NO_TRUTH_LEAKAGE_REPORT.md](EXPERIMENT_7_NO_TRUTH_LEAKAGE_REPORT.md) | [HTML](reports/experiment7-no-truth-leakage/experiment7-report.html) | `npm run experiment7:legality` |
+
+实验 7 是实验 4-6 的合法性门槛。若反事实 probe plan 哈希、因果滞后、观测值锁定、inactive mask 或真值使用边界任一检查失败，相关性能结果只能视为暂定结果，不能作为可部署算法的正式证据。
+
+## 14. 文档归档
 
 为保持根目录简洁，旧版说明文件和截图已经归档到：
 

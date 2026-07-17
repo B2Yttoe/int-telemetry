@@ -1,5 +1,5 @@
 {
-  "schema": "int-temerity-real-tle-snapshot/v1",
+  "schema": "int-telemetry-real-tle-snapshot/v1",
   "source": "celestrak",
   "group": "STARLINK",
   "format": "celestrak-gp-json",

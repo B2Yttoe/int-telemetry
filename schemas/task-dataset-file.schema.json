@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://int-temerity.local/schemas/task-dataset-file.schema.json",
-  "title": "INT-Temerity Stage-1 Task Dataset File",
+  "$id": "https://int-telemetry.local/schemas/task-dataset-file.schema.json",
+  "title": "INT-Telemetry Stage-1 Task Dataset File",
   "description": "JSON upload contract for deterministic stage-one workload injection. CSV uploads use the same task fields as the task item schema.",
   "oneOf": [
     {

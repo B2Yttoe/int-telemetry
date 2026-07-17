@@ -261,7 +261,7 @@ const checks = [
   check(
     "main_8x8_snapshot",
     "真实 Starlink 主壳层 8x8 CelesTrak 快照可用",
-    snapshotMain8x8.schema === "int-temerity-real-tle-snapshot/v1" &&
+    snapshotMain8x8.schema === "int-telemetry-real-tle-snapshot/v1" &&
       snapshotMain8x8.source === "celestrak" &&
       snapshotMain8x8.layout?.planes === 8 &&
       snapshotMain8x8.layout?.satellites_per_plane === 8 &&
@@ -277,7 +277,7 @@ const checks = [
   check(
     "main_47x14_snapshot",
     "真实 Starlink 主壳层 47x14 CelesTrak 快照可用",
-    snapshotMain47x14.schema === "int-temerity-real-tle-snapshot/v1" &&
+    snapshotMain47x14.schema === "int-telemetry-real-tle-snapshot/v1" &&
       snapshotMain47x14.source === "celestrak" &&
       snapshotMain47x14.layout?.planes === 47 &&
       snapshotMain47x14.layout?.satellites_per_plane === 14 &&
@@ -293,7 +293,7 @@ const checks = [
   check(
     "scale_72x22_snapshot",
     "最大规模 Starlink 72x22 CelesTrak 快照可用",
-    snapshotScale72x22.schema === "int-temerity-real-tle-snapshot/v1" &&
+    snapshotScale72x22.schema === "int-telemetry-real-tle-snapshot/v1" &&
       snapshotScale72x22.source === "celestrak" &&
       snapshotScale72x22.layout?.planes === 72 &&
       snapshotScale72x22.layout?.satellites_per_plane === 22 &&

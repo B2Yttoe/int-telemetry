@@ -1,0 +1,30 @@
+{
+  "schema": "int-telemetry-experiment14b-v2-final-evidence-addendum/v1",
+  "status": "pre-registered-after-gp0-and-before-future-external-results",
+  "purpose": "Close the Experiment 14B v2 audit chain across the original completion audit and all later Radar, M-Lab, RIPE, strict-pairing, and system-validation addenda.",
+  "minimum_strict_pairs_per_source": 20,
+  "required_checks": [
+    "freeze_chain_integral",
+    "gp0_fresh_input_locked",
+    "gp1_blind_orbit_validation",
+    "radar_prospective_causality",
+    "mlab_query_semantics_locked",
+    "mlab_bigquery_provenance",
+    "ripe_fixed_anchor_future_window",
+    "strict_pairing_complete",
+    "strict_scoring_complete",
+    "ns3_cross_validation_complete",
+    "internal_claim_boundary_locked",
+    "zero_test_leakage_and_updates",
+    "canonical_completion_complete"
+  ],
+  "causality": {
+    "gp0_may_exist_at_freeze": true,
+    "gp1_result_must_not_exist_at_freeze": true,
+    "radar_future_score_must_not_exist_at_freeze": true,
+    "ripe_future_result_must_not_exist_at_freeze": true,
+    "mlab_future_result_must_not_exist_at_freeze": true,
+    "post_result_parameter_updates_allowed": false
+  },
+  "claim_boundary": "Final completion validates fresh public orbit evolution, strictly paired user-visible RTT/throughput, and packet-level INT execution trends. It does not establish operator-internal CPU, battery, queue, routing, or ISL scheduling ground truth."
+}

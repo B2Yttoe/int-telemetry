@@ -1,7 +1,6 @@
 import { useMemo } from "react";
 import { GitBranch, RadioTower } from "lucide-react";
-import { walkerNetworkConfig } from "../config/walkerNetworkConfig";
-import type { NetworkSlice, SatelliteLink, SatelliteNode } from "../simulation/types";
+import type { NetworkSlice, SatelliteLink, SatelliteNode, WalkerNetworkConfig } from "../simulation/types";
 
 type Selection =
   | { type: "node"; id: string }
@@ -10,6 +9,7 @@ type Selection =
 interface PlanarTopologyProps {
   slices: NetworkSlice[];
   slice: NetworkSlice;
+  config: WalkerNetworkConfig;
   snapshotMode: boolean;
   selection: Selection;
   onSelect: (selection: Selection) => void;
@@ -60,14 +60,15 @@ function activeLinkCount(slice: NetworkSlice, kind?: SatelliteLink["kind"]) {
 export default function PlanarTopology({
   slices,
   slice,
+  config,
   snapshotMode,
   selection,
   onSelect,
   onTimeSelect,
   onResumeMotion,
 }: PlanarTopologyProps) {
-  const planeCount = walkerNetworkConfig.constellation.planes;
-  const slotCount = walkerNetworkConfig.constellation.satellitesPerPlane;
+  const planeCount = config.constellation.planes;
+  const slotCount = config.constellation.satellitesPerPlane;
   const gridWidth = VIEWBOX_WIDTH - GRID_LEFT - GRID_RIGHT;
   const gridHeight = VIEWBOX_HEIGHT - GRID_TOP - GRID_BOTTOM;
 
@@ -175,7 +176,7 @@ export default function PlanarTopology({
               const point = pointByNodeId.get(node.id);
               if (!point) return null;
               const selected = selection.type === "node" && selection.id === node.id;
-              const inPolarRegion = Math.abs(node.timeState.latitudeDeg) >= walkerNetworkConfig.polarRegion.latitudeDeg;
+              const inPolarRegion = Math.abs(node.timeState.latitudeDeg) >= config.polarRegion.latitudeDeg;
               return (
                 <g
                   key={node.id}

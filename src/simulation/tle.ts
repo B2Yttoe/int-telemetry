@@ -17,6 +17,7 @@ import type {
   WalkerNetworkConfig,
 } from "./types";
 import { sunlightState } from "./spaceEnvironment";
+import { orbitEpochUtcDate } from "./utcEpoch";
 
 const TWO_PI = Math.PI * 2;
 
@@ -134,7 +135,7 @@ function buildTleLines(record: Omit<TleSatelliteRecord, "tle_line1" | "tle_line2
   const satnum = String(record.norad_id).padStart(5, "0").slice(-5);
   const index = record.plane_id * config.constellation.satellitesPerPlane + record.slot_id;
   const { tleInternationalDesignator } = cosparIds(index, config);
-  const epoch = epochToTleEpoch(new Date(record.epoch));
+  const epoch = epochToTleEpoch(orbitEpochUtcDate(record.epoch));
   const ndot = " .00000000";
   const nddot = " 00000+0";
   const bstar = formatTleExponential(record.bstar);

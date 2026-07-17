@@ -2,6 +2,10 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import {
+  DEFAULT_GOAL_ALGORITHM,
+  buildGoalCoverageChecks,
+} from "./goalVerificationPolicy.mjs";
 
 function argValue(args, name, fallback = "") {
   const index = args.indexOf(name);
@@ -95,14 +99,14 @@ function markdownTable(checks) {
 }
 
 const args = process.argv.slice(2);
-const tasks = resolve(argValue(args, "--tasks", "examples/datasets/radar-calibrated-starlink-main-47x14-48-traffic.csv"));
+const tasks = resolve(argValue(args, "--tasks", "examples/datasets/radar-calibrated-starlink-72x22-48-traffic.csv"));
 const orbit = argValue(args, "--orbit", "real-tle-sgp4");
 const mode = argValue(args, "--mode", "operational");
-const algorithm = argValue(args, "--algorithm", "path-balance");
+const algorithm = argValue(args, "--algorithm", DEFAULT_GOAL_ALGORITHM);
 const routing = argValue(args, "--routing", "congestion-aware-shortest-path");
 const slices = argValue(args, "--slices", "");
 const tleSnapshot = resolve(
-  argValue(args, "--tle-snapshot", "data/tle-snapshots/celestrak-starlink-main-550km-53deg-walker-47x14.json"),
+  argValue(args, "--tle-snapshot", "data/tle-snapshots/celestrak-starlink-real-walker-72x22.json"),
 );
 const reportDir = resolve(argValue(args, "--report-dir", "reports/goal"));
 const out = resolve(argValue(args, "--out", `stage2-int/runs/goal-e2e-${nowStamp()}`));
@@ -212,19 +216,16 @@ check(checks, "交付清单指向节点状态主输出", existsSync(deliverables
 check(checks, "交付清单指向链路状态主输出", existsSync(deliverables.primary_int_state_dataset?.link_state_csv), deliverables.primary_int_state_dataset?.link_state_csv);
 check(checks, "INT 过程可视化包存在", existsSync(processVisualizationPath) && processVisualization.schema_version === "stage2-int-process-visualization-v1", processVisualizationPath);
 check(checks, "INT 过程包覆盖全部时间片", processVisualization.summary?.slices === manifest.stage1?.counts?.metrics, `${processVisualization.summary?.slices}/${manifest.stage1?.counts?.metrics}`);
-check(checks, "probe-int 节点覆盖率 100%", accuracy.primary_probe_int?.metrics?.node_sample_coverage === 1, pct(accuracy.primary_probe_int?.metrics?.node_sample_coverage));
-check(checks, "probe-int 链路覆盖率 100%", accuracy.primary_probe_int?.metrics?.link_sample_coverage === 1, pct(accuracy.primary_probe_int?.metrics?.link_sample_coverage));
-check(checks, "probe-int 活动链路覆盖率 100%", accuracy.primary_probe_int?.metrics?.active_link_sample_coverage === 1, pct(accuracy.primary_probe_int?.metrics?.active_link_sample_coverage));
-check(checks, "probe-int unknown 样本为 0", accuracy.primary_probe_int?.metrics?.unknown_node_samples === 0 && accuracy.primary_probe_int?.metrics?.unknown_link_samples === 0, `${accuracy.primary_probe_int?.metrics?.unknown_node_samples}/${accuracy.primary_probe_int?.metrics?.unknown_link_samples}`);
-check(checks, "逐时间片全覆盖审计通过", accuracy.primary_probe_int?.coverage_audit_summary?.pass === true, `${accuracy.primary_probe_int?.coverage_audit_summary?.passed_slices}/${accuracy.primary_probe_int?.coverage_audit_summary?.slices}`);
-check(checks, "准确率报告结论通过", accuracy.conclusion?.pass === true, accuracy.conclusion?.statement ?? "");
+buildGoalCoverageChecks({ algorithm, accuracy }).forEach((item) => {
+  check(checks, item.label, item.passed, item.evidence);
+});
 check(checks, "文件完整性索引覆盖关键产物", fileIndex.file_count >= 27, `file_count=${fileIndex.file_count}`);
 check(checks, "前端构建通过", skipBuild || buildPassed === true, skipBuild ? "跳过" : String(buildPassed));
 
 const passed = checks.filter((item) => item.passed).length;
 const failed = checks.length - passed;
 const report = {
-  schema_version: "int-temerity-goal-e2e-verification-v1",
+  schema_version: "int-telemetry-goal-e2e-verification-v1",
   generated_at: new Date().toISOString(),
   objective:
     "external traffic dataset -> high-fidelity satellite simulation -> INT telemetry -> network-wide state dataset -> accuracy report",
@@ -241,9 +242,12 @@ const report = {
     dataset_fingerprint: manifest.stage1?.fingerprints?.dataset,
     truth_fingerprint: manifest.stage1?.fingerprints?.truth,
     int_verification_checks: intVerification.summary?.checks,
+    primary_algorithm: algorithm,
     probe_node_coverage: accuracy.primary_probe_int?.metrics?.node_sample_coverage,
     probe_link_coverage: accuracy.primary_probe_int?.metrics?.link_sample_coverage,
     probe_full_time_step_pass: accuracy.primary_probe_int?.metrics?.full_time_step_pass,
+    int_mc_active_link_completion_coverage: accuracy.primary_probe_int?.int_mc_metrics?.active_link_completion_coverage ?? null,
+    int_mc_node_completion_coverage: accuracy.primary_probe_int?.int_mc_metrics?.node_completion_coverage ?? null,
   },
   artifacts: {
     manifest_json: manifestPath,

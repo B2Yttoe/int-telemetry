@@ -18,6 +18,10 @@ dashboard-*.png
 tmp-*.png
 .tmp/
 tmp/
+__pycache__/
+*.py[cod]
+~$*
+/0.0001
 project-docs/archived-runtime-artifacts/*
 !project-docs/archived-runtime-artifacts/.gitkeep
 

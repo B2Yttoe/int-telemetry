@@ -199,7 +199,7 @@ const trafficResult = parseLastJson(trafficRun.stdout, trafficRun.label);
 const truthResult = parseLastJson(truthRun.stdout, truthRun.label);
 
 const manifest = {
-  schema: "int-temerity-stage1-realistic-dataset-manifest/v1",
+  schema: "int-telemetry-stage1-realistic-dataset-manifest/v1",
   generated_at: new Date().toISOString(),
   purpose: "Generate first-stage node/link/route truth data from public Starlink TLE snapshots and calibrated task traffic for INT replay and ML prediction experiments.",
   inputs: {

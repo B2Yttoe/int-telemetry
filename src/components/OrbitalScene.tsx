@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { walkerNetworkConfig } from "../config/walkerNetworkConfig";
 import {
   calculatePosition,
   circularOrbitVelocityKmS,
@@ -9,7 +8,7 @@ import {
   planeRaanDeg,
   planeSpacingDeg,
 } from "../simulation/walker";
-import type { NetworkSlice, OrbitModel, SatelliteLink, SatelliteNode } from "../simulation/types";
+import type { NetworkSlice, OrbitModel, SatelliteLink, SatelliteNode, WalkerNetworkConfig } from "../simulation/types";
 
 type Selection =
   | { type: "node"; id: string }
@@ -17,6 +16,7 @@ type Selection =
 
 interface OrbitalSceneProps {
   slice: NetworkSlice;
+  config: WalkerNetworkConfig;
   selection: Selection;
   snapshotMode: boolean;
   showOrbitPlanes: boolean;
@@ -75,10 +75,11 @@ const restrictionColor = {
   "solar-interference": "#fde047",
   "link-budget": "#f43f5e",
   "capacity-limit": "#fb7185",
+  "experiment8-controlled-dynamicity": "#ef4444",
 };
 
-function scalePosition(position: { x: number; y: number; z: number }) {
-  const scale = EARTH_RADIUS_UNITS / walkerNetworkConfig.constellation.earthRadiusKm;
+function scalePosition(position: { x: number; y: number; z: number }, config: WalkerNetworkConfig) {
+  const scale = EARTH_RADIUS_UNITS / config.constellation.earthRadiusKm;
   return new THREE.Vector3(position.x * scale, position.z * scale, position.y * scale).multiplyScalar(
     ORBIT_VISUAL_EXPANSION,
   );
@@ -106,23 +107,23 @@ function segmentMinimumRadiusKm(a: DynamicNodeState, b: DynamicNodeState) {
   return Math.sqrt(px * px + py * py + pz * pz);
 }
 
-function dynamicInterPlaneLinkActive(source: DynamicNodeState, target: DynamicNodeState) {
+function dynamicInterPlaneLinkActive(source: DynamicNodeState, target: DynamicNodeState, config: WalkerNetworkConfig) {
   if (
-    walkerNetworkConfig.polarRegion.enabled &&
-    (Math.abs(source.latitudeDeg) >= walkerNetworkConfig.polarRegion.latitudeDeg ||
-      Math.abs(target.latitudeDeg) >= walkerNetworkConfig.polarRegion.latitudeDeg)
+    config.polarRegion.enabled &&
+    (Math.abs(source.latitudeDeg) >= config.polarRegion.latitudeDeg ||
+      Math.abs(target.latitudeDeg) >= config.polarRegion.latitudeDeg)
   ) {
     return false;
   }
 
-  if (distanceKm(source, target) > walkerNetworkConfig.interPlane.maxDistanceKm) {
+  if (distanceKm(source, target) > config.interPlane.maxDistanceKm) {
     return false;
   }
 
-  if (walkerNetworkConfig.earthOcclusion.enabled) {
+  if (config.earthOcclusion.enabled) {
     return (
       segmentMinimumRadiusKm(source, target) >
-      walkerNetworkConfig.constellation.earthRadiusKm + walkerNetworkConfig.earthOcclusion.clearanceKm
+      config.constellation.earthRadiusKm + config.earthOcclusion.clearanceKm
     );
   }
 
@@ -231,12 +232,12 @@ const orbitModelLabel: Record<OrbitModel, string> = {
   "real-tle-sgp4": "真实 TLE + SGP4",
 };
 
-function createOrbitLine(plane: number, orbitModel: OrbitModel) {
+function createOrbitLine(plane: number, orbitModel: OrbitModel, config: WalkerNetworkConfig) {
   const points: THREE.Vector3[] = [];
-  const period = orbitalPeriodMinutes(walkerNetworkConfig);
+  const period = orbitalPeriodMinutes(config);
   for (let i = 0; i <= 192; i += 1) {
     const minute = (period * i) / 192;
-    points.push(scalePosition(calculatePosition(plane, 0, minute, walkerNetworkConfig, orbitModel)));
+    points.push(scalePosition(calculatePosition(plane, 0, minute, config, orbitModel), config));
   }
   const geometry = new THREE.BufferGeometry().setFromPoints(points);
   const color = PLANE_COLORS[plane % PLANE_COLORS.length];
@@ -261,6 +262,7 @@ function createLatitudeRing(latitudeDeg: number) {
 
 export default function OrbitalScene({
   slice,
+  config,
   selection,
   snapshotMode,
   showOrbitPlanes,
@@ -371,9 +373,9 @@ export default function OrbitalScene({
     scene.add(atmosphere);
 
     const polarGroup = new THREE.Group();
-    if (walkerNetworkConfig.polarRegion.enabled) {
-      polarGroup.add(createLatitudeRing(walkerNetworkConfig.polarRegion.latitudeDeg));
-      polarGroup.add(createLatitudeRing(-walkerNetworkConfig.polarRegion.latitudeDeg));
+    if (config.polarRegion.enabled) {
+      polarGroup.add(createLatitudeRing(config.polarRegion.latitudeDeg));
+      polarGroup.add(createLatitudeRing(-config.polarRegion.latitudeDeg));
     }
     scene.add(polarGroup);
 
@@ -392,14 +394,15 @@ export default function OrbitalScene({
       clearGroup(satelliteGroup);
       clearGroup(linkGroup);
 
-      for (let plane = 0; plane < walkerNetworkConfig.constellation.planes; plane += 1) {
-        orbitGroup.add(createOrbitLine(plane, sliceRef.current.orbitModel));
+      for (let plane = 0; plane < config.constellation.planes; plane += 1) {
+        orbitGroup.add(createOrbitLine(plane, sliceRef.current.orbitModel, config));
         const label = createTextSprite(
-          `P${plane + 1} ${Math.round(planeRaanDeg(plane, walkerNetworkConfig))}°`,
+          `P${plane + 1} ${Math.round(planeRaanDeg(plane, config))}°`,
           PLANE_COLORS[plane % PLANE_COLORS.length],
         );
         const labelPosition = scalePosition(
-          calculatePosition(plane, 0, 11, walkerNetworkConfig, sliceRef.current.orbitModel),
+          calculatePosition(plane, 0, 11, config, sliceRef.current.orbitModel),
+          config,
         ).multiplyScalar(1.04);
         label.position.copy(labelPosition);
         orbitGroup.add(label);
@@ -496,10 +499,10 @@ export default function OrbitalScene({
           visual.node.plane,
           visual.node.slot,
           minute,
-          walkerNetworkConfig,
+          config,
           sliceRef.current.orbitModel,
         );
-        const scenePosition = scalePosition(position);
+        const scenePosition = scalePosition(position, config);
         dynamicNodes.set(visual.node.id, {
           scenePosition,
           latitudeDeg: position.latitudeDeg,
@@ -518,7 +521,7 @@ export default function OrbitalScene({
         line.geometry = new THREE.BufferGeometry().setFromPoints([source.scenePosition, target.scenePosition]);
         dynamicLinks.set(
           link.id,
-          link.kind === "inter-plane" ? dynamicInterPlaneLinkActive(source, target) : link.state.isActive,
+          link.kind === "inter-plane" ? dynamicInterPlaneLinkActive(source, target, config) : link.state.isActive,
         );
       });
 
@@ -571,11 +574,11 @@ export default function OrbitalScene({
     animate();
 
     const sceneObjectRebuilder = () => rebuildSceneObjects();
-    hostElement.addEventListener("temerity-rebuild-scene", sceneObjectRebuilder);
+    hostElement.addEventListener("telemetry-rebuild-scene", sceneObjectRebuilder);
 
     return () => {
       cancelAnimationFrame(frameId);
-      hostElement.removeEventListener("temerity-rebuild-scene", sceneObjectRebuilder);
+      hostElement.removeEventListener("telemetry-rebuild-scene", sceneObjectRebuilder);
       renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
       resizeObserver.disconnect();
       controls.dispose();
@@ -591,10 +594,10 @@ export default function OrbitalScene({
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, []);
+  }, [config]);
 
   useEffect(() => {
-    hostRef.current?.dispatchEvent(new Event("temerity-rebuild-scene"));
+    hostRef.current?.dispatchEvent(new Event("telemetry-rebuild-scene"));
   }, [slice]);
 
   return (
@@ -603,19 +606,19 @@ export default function OrbitalScene({
       <div className="scene-badges">
         <span>LEO</span>
         <span>{orbitModelLabel[slice.orbitModel]}</span>
-        <span>{walkerNetworkConfig.constellation.planes} 个轨道面</span>
-        <span>RAAN 间隔 {planeSpacingDeg(walkerNetworkConfig).toFixed(1)}°</span>
-        <span>高度 {walkerNetworkConfig.constellation.altitudeKm} km</span>
-        <span>周期 {orbitalPeriodMinutes(walkerNetworkConfig).toFixed(1)} 分钟</span>
-        <span>速度 {circularOrbitVelocityKmS(walkerNetworkConfig).toFixed(2)} km/s</span>
-        <span>极区 ±{walkerNetworkConfig.polarRegion.latitudeDeg}°</span>
+        <span>{config.constellation.planes} 个轨道面</span>
+        <span>RAAN 间隔 {planeSpacingDeg(config).toFixed(1)}°</span>
+        <span>高度 {config.constellation.altitudeKm} km</span>
+        <span>周期 {orbitalPeriodMinutes(config).toFixed(1)} 分钟</span>
+        <span>速度 {circularOrbitVelocityKmS(config).toFixed(2)} km/s</span>
+        <span>极区 ±{config.polarRegion.latitudeDeg}°</span>
         <span>{snapshotMode ? `快照 T${slice.index.toString().padStart(2, "0")}` : "连续运动"}</span>
         {snapshotMode ? <span>仅显示已连接链路</span> : null}
         <span>地球自转参考系</span>
       </div>
       {showOrbitPlanes ? (
         <div className="plane-legend" aria-label="轨道面图例">
-          {Array.from({ length: walkerNetworkConfig.constellation.planes }, (_, plane) => (
+          {Array.from({ length: config.constellation.planes }, (_, plane) => (
             <span key={plane}>
               <i style={{ backgroundColor: PLANE_COLORS[plane % PLANE_COLORS.length] }} />
               P{plane + 1}

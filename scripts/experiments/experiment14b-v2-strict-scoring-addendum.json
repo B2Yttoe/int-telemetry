@@ -1,0 +1,16 @@
+{
+  "schema": "int-telemetry-experiment14b-v2-strict-scoring-addendum/v1",
+  "experiment_id": "experiment14b-prospective-external-validation-v2-utc-corrected",
+  "eligible_rows": "strict_pair=true under the frozen time/geography/server addendum",
+  "metrics": {
+    "mlab_ndt7": ["rtt_ms", "throughput_mbps"],
+    "ripe_atlas_exact_anchor": ["rtt_ms"]
+  },
+  "reported_statistics": ["sample_count", "mae", "rmse", "bias", "p50_absolute_error", "p95_absolute_error", "pearson_correlation", "prediction_interval_coverage"],
+  "causality": {
+    "allow_test_values_for_fit": false,
+    "allow_test_values_for_interval_calibration": false,
+    "allow_post_test_parameter_updates": false
+  },
+  "claim_boundary": "Scores are computed only from rows that pass the separately frozen strict-pairing audit. RIPE contributes RTT only because its ping measurement has no NDT throughput target."
+}

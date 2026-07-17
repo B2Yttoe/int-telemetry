@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://int-temerity.local/schemas/task-dataset.schema.json",
-  "title": "INT-Temerity Stage-1 Task Traffic Dataset",
+  "$id": "https://int-telemetry.local/schemas/task-dataset.schema.json",
+  "title": "INT-Telemetry Stage-1 Task Traffic Dataset",
   "description": "CSV rows or JSON task objects that inject deterministic workload into the Walker/LEO operational simulation.",
   "x-compatibleAliases": {
     "task_id": ["id", "flow_id"],

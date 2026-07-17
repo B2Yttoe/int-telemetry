@@ -444,6 +444,36 @@ h1 {
   background: var(--teal);
 }
 
+.constellation-switch {
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+.constellation-switch button {
+  min-width: 126px;
+}
+
+.profile-note {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  max-width: min(100%, 920px);
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid #cbd9d3;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #4f665d;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.profile-note strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
 .dataset-upload {
   display: inline-flex;
   flex-direction: column;

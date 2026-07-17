@@ -1,0 +1,41 @@
+# 实验 5：遥测与计算开销分解实验
+
+## 实验做了什么
+
+本实验把增强前 INT-MC 与完整增强 LEO-INT-MC 的一次运行开销拆成网络生成开销、ISL累计承载开销、遥测能耗和六阶段本机计算时间。详细图表见 [实验5 HTML报告](reports/experiment5-overhead-decomposition/experiment5-overhead-report.html)。
+
+生成字节满足：
+
+\[B_{total}=B_{probe}+B_{metadata}+B_{report}+B_{other}\]
+
+ISL累计承载字节按每跳累加，因此单独报告，不重复加入生成字节。
+
+## 实验结果
+
+| 星座 | 方法 | B/节点/片 | B/有效状态 | ISL承载MB | 遥测能耗J | 流水线时间s | 避免全量重规划率 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Iridium 66 | 增强前 INT-MC | 506.24 | 232.90 | 1.79 | 180.87 | 5.90 | 12.50% |
+| Iridium 66 | 完整增强 LEO-INT-MC | 430.09 | 197.87 | 1.83 | 220.01 | 6.65 | 0.00% |
+| Telesat 351 | 增强前 INT-MC | 426.44 | 147.69 | 19.35 | 765.25 | 43.04 | 33.33% |
+| Telesat 351 | 完整增强 LEO-INT-MC | 416.28 | 144.17 | 22.29 | 913.88 | 51.82 | 31.25% |
+| Starlink 1584 | 增强前 INT-MC | 18.70 | 7.07 | 3.30 | 163.81 | 132.72 | 33.33% |
+| Starlink 1584 | 完整增强 LEO-INT-MC | 24.74 | 9.36 | 5.17 | 213.44 | 157.24 | 33.33% |
+
+## 证明了什么
+
+该实验能够区分开销来自metadata、报告、路径长度还是地面计算，并量化拓扑复用避免全量重规划的比例。它避免仅用“遥测总字节”概括所有成本。
+
+## 不能证明什么
+
+墙钟时间只代表当前机器和Node.js实现上的相对计算开销，不等于真实卫星处理器执行时间；仿真遥测能耗也不是硬件功耗实测。
+
+## 产物索引
+
+- [HTML 可视化](reports/experiment5-overhead-decomposition/experiment5-overhead-report.html)
+- [汇总 CSV](reports/experiment5-overhead-decomposition/experiment5-overhead-summary.csv)
+- [汇总 JSON](reports/experiment5-overhead-decomposition/experiment5-overhead-summary.json)
+- [实验 manifest](reports/experiment5-overhead-decomposition/experiment5-manifest.json)
+
+## 复现
+
+`npm run experiment5:overhead`

@@ -4,10 +4,15 @@ import type {
   TleCatalogSource,
   TleSatelliteRecord,
 } from "./types";
+import { normalizeOrbitEpochUtc, parseOrbitEpochUtcMs } from "./utcEpoch";
 
 const EARTH_RADIUS_KM = 6371;
 const MU_KM3_S2 = 398600.4418;
 const TWO_PI = Math.PI * 2;
+const SUPPORTED_REAL_TLE_SNAPSHOT_SCHEMAS = new Set([
+  "int-telemetry-real-tle-snapshot/v1",
+  "int-temerity-real-tle-snapshot/v1",
+]);
 
 export interface CelestrakGpJsonRecord {
   OBJECT_NAME?: string;
@@ -116,7 +121,7 @@ function candidateFromCelestrak(raw: CelestrakGpJsonRecord): Candidate | undefin
   const argumentOfPerigee = toNumber(raw.ARG_OF_PERICENTER);
   const meanAnomaly = toNumber(raw.MEAN_ANOMALY);
   const bstar = Number.isFinite(toNumber(raw.BSTAR)) ? toNumber(raw.BSTAR) : 0;
-  const epoch = typeof raw.EPOCH === "string" ? raw.EPOCH : "";
+  const epoch = normalizeOrbitEpochUtc(raw.EPOCH);
   const satelliteName = typeof raw.OBJECT_NAME === "string" ? raw.OBJECT_NAME : "";
 
   if (
@@ -274,8 +279,8 @@ function sampleEvenly<T>(items: T[], count: number) {
 }
 
 function phaseAtReference(candidate: Candidate, referenceIso: string) {
-  const epochMs = Date.parse(candidate.epoch);
-  const referenceMs = Date.parse(referenceIso);
+  const epochMs = parseOrbitEpochUtcMs(candidate.epoch);
+  const referenceMs = parseOrbitEpochUtcMs(referenceIso);
   if (!Number.isFinite(epochMs) || !Number.isFinite(referenceMs)) {
     return candidate.argumentOfLatitude;
   }
@@ -415,7 +420,7 @@ export function buildRealTleSnapshotFromCelestrakJson(
   }));
 
   return {
-    schema: "int-temerity-real-tle-snapshot/v1",
+    schema: "int-telemetry-real-tle-snapshot/v1",
     source: options.source,
     group: options.group,
     format: "celestrak-gp-json",
@@ -449,7 +454,7 @@ export function verifyRealTleSnapshot(snapshot: RealTleCatalogSnapshot) {
   const ids = new Set<string>();
   const planeSlotIds = new Set<string>();
 
-  if (snapshot.schema !== "int-temerity-real-tle-snapshot/v1") errors.push("unsupported snapshot schema");
+  if (!SUPPORTED_REAL_TLE_SNAPSHOT_SCHEMAS.has(snapshot.schema)) errors.push("unsupported snapshot schema");
   if (snapshot.selected_count !== snapshot.satellites.length) errors.push("selected_count does not match satellites length");
   if (snapshot.satellites.length !== expectedCount) {
     errors.push(`expected ${expectedCount} satellites for layout, got ${snapshot.satellites.length}`);

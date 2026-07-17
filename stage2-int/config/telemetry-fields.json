@@ -32,5 +32,87 @@
     "egress_link_id",
     "previous_hop",
     "next_hop"
-  ]
+  ],
+  "selective_metadata_control": {
+    "instruction_header_bytes": 4,
+    "profile_bits_per_hop": 3,
+    "accounting_note": "The target/profile mask is counted even when every hop is forward-only."
+  },
+  "selective_metadata_profiles": {
+    "node_full": {
+      "bytes": 96,
+      "node_fields": [
+        "node_id",
+        "mode",
+        "cpu_percent",
+        "queue_depth",
+        "queued_traffic_mb",
+        "cache_used_mb",
+        "energy_percent",
+        "can_accept_tasks"
+      ],
+      "link_fields": "full-or-light-egress-link-as-required"
+    },
+    "node_core": {
+      "bytes": 32,
+      "node_fields": [
+        "mode",
+        "cpu_percent",
+        "queue_depth",
+        "queued_traffic_mb",
+        "cache_used_mb",
+        "energy_percent",
+        "can_accept_tasks"
+      ],
+      "note": "Used once per path-covered node and may be combined with a 20-byte light or 48-byte full link profile."
+    },
+    "link_full": {
+      "bytes": 48,
+      "link_fields": [
+        "link_id",
+        "status",
+        "is_active",
+        "utilization_percent",
+        "latency_ms",
+        "queue_latency_ms",
+        "effective_capacity_mbps",
+        "queued_traffic_mb",
+        "dropped_traffic_mb",
+        "congestion_percent",
+        "packet_error_rate"
+      ]
+    },
+    "link_core": {
+      "bytes": 48,
+      "link_fields": [
+        "link_id",
+        "status",
+        "is_active",
+        "utilization_percent",
+        "latency_ms",
+        "queue_latency_ms",
+        "effective_capacity_mbps",
+        "queued_traffic_mb",
+        "dropped_traffic_mb",
+        "congestion_percent",
+        "packet_error_rate"
+      ],
+      "note": "Conservative link-only profile preserving every reconstructed dynamic link metric while removing duplicated node metadata."
+    },
+    "link_light": {
+      "bytes": 20,
+      "link_fields": [
+        "link_id",
+        "status",
+        "is_active",
+        "utilization_percent",
+        "queue_latency_ms"
+      ]
+    },
+    "forward_only": {
+      "bytes": 0,
+      "node_fields": [],
+      "link_fields": []
+    }
+  }
 }

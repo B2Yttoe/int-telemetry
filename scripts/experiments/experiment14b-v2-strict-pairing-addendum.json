@@ -1,0 +1,24 @@
+{
+  "schema": "int-telemetry-experiment14b-v2-strict-pairing-addendum/v1",
+  "experiment_id": "experiment14b-prospective-external-validation-v2-utc-corrected",
+  "purpose": "Require both M-Lab and RIPE Atlas evidence to satisfy the same frozen topology-time, direct-geography, and fixed-server pairing rules.",
+  "minimum_pairs": {
+    "mlab_ndt7": 20,
+    "ripe_atlas_exact_anchor": 20
+  },
+  "maximum_topology_time_offset_seconds": 150,
+  "required": {
+    "modeled_status": "modeled",
+    "temporal_pairing": "exact-topology-window",
+    "server_location_source": "direct-measurement-target-coordinate",
+    "server_identity_present": true,
+    "ripe_target_semantics": "fixed-ripe-atlas-anchor"
+  },
+  "excluded_as_strict_evidence": [
+    "public-anycast-proxy",
+    "representative-periodic-phase",
+    "derived-server-centroid",
+    "missing-server-identity"
+  ],
+  "claim_boundary": "This addendum audits pairing validity only. It does not convert public proxies, synthetic data, or periodically phase-mapped historical samples into strict evidence."
+}

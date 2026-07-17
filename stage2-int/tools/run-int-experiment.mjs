@@ -2,6 +2,7 @@ import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { basename, resolve, join } from "node:path";
 import { spawn } from "node:child_process";
+import { writeProcessVisualizationJson } from "./process-visualization-writer.mjs";
 
 function argValue(args, name, fallback = "") {
   const index = args.indexOf(name);
@@ -431,7 +432,7 @@ async function buildProcessVisualization(manifest) {
 
 async function writeProcessVisualization(manifest) {
   const process = await buildProcessVisualization(manifest);
-  await writeFile(manifest.outputs.process_visualization_json, JSON.stringify(process, null, 2), "utf8");
+  await writeProcessVisualizationJson(manifest.outputs.process_visualization_json, process);
   await writeFile(manifest.outputs.process_visualization_md, buildProcessVisualizationMarkdown(process), "utf8");
   return process;
 }
@@ -1063,12 +1064,28 @@ const intMcSamplingRate = argValue(args, "--int-mc-sampling-rate", "0.25");
 const intMcTargetActiveLinkSamplingRate = argValue(args, "--int-mc-target-active-link-sampling-rate", intMcSamplingRate);
 const intMcRank = argValue(args, "--int-mc-rank", "5");
 const intMcSelectionStrategy = argValue(args, "--int-mc-selection-strategy", "int-mc-leverage");
+const intMcPlanner = argValue(args, "--int-mc-planner", "legacy-int-mc");
+const intMcPlannerModes = argValue(args, "--int-mc-planner-modes", "reuse,repair,fresh");
+const intMcRiskWeight = argValue(args, "--int-mc-risk-weight", "0.35");
+const intMcRedundancyWeight = argValue(args, "--int-mc-redundancy-weight", "0.3");
+const intMcPlanningCostWeight = argValue(args, "--int-mc-planning-cost-weight", "0.05");
+const intMcInformationGainMode = argValue(args, "--int-mc-information-gain-mode", "marginal");
+const intMcMetadataActions = argValue(args, "--int-mc-metadata-actions", "full,compact,selective");
+const intMcObservabilityMode = argValue(args, "--int-mc-observability-mode", "oam-only").toLowerCase();
+const intMcFeedbackLagSlices = argValue(args, "--int-mc-feedback-lag-slices", intMcObservabilityMode === "oam-only" ? "1" : "0");
 const intMcEnergyGuardThreshold = argValue(args, "--int-mc-energy-guard-threshold", "0.45");
 const intMcEnergyBudget = argValue(args, "--int-mc-energy-budget", "true");
 const intMcEnergyBudgetMinActiveLinkSamplingRate = argValue(args, "--int-mc-energy-budget-min-active-link-sampling-rate", "0.08");
 const intMcEnergyBudgetMaxReduction = argValue(args, "--int-mc-energy-budget-max-reduction", "0.45");
 const intMcThresholdCalibrationHorizon = argValue(args, "--int-mc-threshold-calibration-horizon", "4");
 const intMcPredictionScoreHorizon = argValue(args, "--int-mc-prediction-score-horizon", intMcThresholdCalibrationHorizon);
+const intMcTopologyVersionedObjective = argValue(args, "--int-mc-topology-versioned-objective", "true");
+const intMcObjectiveLambdaBytes = argValue(args, "--int-mc-objective-lambda-bytes", "0.18");
+const intMcObjectiveLambdaEnergy = argValue(args, "--int-mc-objective-lambda-energy", "0.07");
+const intMcObjectiveLambdaPlanning = argValue(args, "--int-mc-objective-lambda-planning", "0.05");
+const intMcObjectiveLambdaExpectedError = argValue(args, "--int-mc-objective-lambda-expected-error", "0.55");
+const intMcObjectiveLambdaAoi = argValue(args, "--int-mc-objective-lambda-aoi", "0.15");
+const intMcObjectiveConfidenceThreshold = argValue(args, "--int-mc-objective-confidence-threshold", "0.45");
 const intMcCostAwareSampling = argValue(args, "--int-mc-cost-aware-sampling", "true");
 const intMcCostAwarenessWeight = argValue(args, "--int-mc-cost-awareness-weight", "0.28");
 const intMcTelemetryByteBudgetPerSlice = argValue(args, "--int-mc-telemetry-byte-budget-per-slice", "0");
@@ -1083,6 +1100,29 @@ const intMcWarmupSlices = argValue(args, "--int-mc-warmup-slices", "auto");
 const intMcPredictionHorizonSlices = argValue(args, "--int-mc-prediction-horizon-slices", "auto");
 const intMcRefreshSlices = argValue(args, "--int-mc-refresh-slices", "auto");
 const intMcIterations = argValue(args, "--int-mc-iterations", "12");
+const intMcCompletionBackend = argValue(args, "--int-mc-completion-backend", "low-rank");
+const intMcMlEpochs = argValue(args, "--int-mc-ml-epochs", intMcIterations);
+const intMcMlLearningRate = argValue(args, "--int-mc-ml-learning-rate", "");
+const intMcMlTrainingSamples = argValue(args, "--int-mc-ml-training-samples", "12000");
+const intMcMlHiddenUnits = argValue(args, "--int-mc-ml-hidden-units", "96");
+const intMcMlHiddenLayers = argValue(args, "--int-mc-ml-hidden-layers", "2");
+const intMcMlLatentRank = argValue(args, "--int-mc-ml-latent-rank", "auto");
+const intMcSoftImputeLambdaRatio = argValue(args, "--int-mc-soft-impute-lambda-ratio", "0.08");
+const intMcKalmanProcessVariance = argValue(args, "--int-mc-kalman-process-variance", "0.05");
+const intMcKalmanMeasurementVariance = argValue(args, "--int-mc-kalman-measurement-variance", "0.1");
+const intMcKalmanInitialVariance = argValue(args, "--int-mc-kalman-initial-variance", "1");
+const intMcGraphRegularizationWeight = argValue(args, "--int-mc-graph-regularization-weight", "0.4");
+const intMcTemporalRegularizationWeight = argValue(args, "--int-mc-temporal-regularization-weight", "0.25");
+const intMcPriorRegularizationWeight = argValue(args, "--int-mc-prior-regularization-weight", "0.2");
+const intMcLowRankRegularizationWeight = argValue(args, "--int-mc-low-rank-regularization-weight", "0.15");
+const intMcJointTensorRank = argValue(args, "--int-mc-joint-tensor-rank", intMcRank);
+const intMcJointTensorEpochs = argValue(args, "--int-mc-joint-tensor-epochs", "60");
+const intMcJointTensorLearningRate = argValue(args, "--int-mc-joint-tensor-learning-rate", "0.05");
+const intMcJointTensorL2 = argValue(args, "--int-mc-joint-tensor-l2", "0.001");
+const intMcJointTensorPredictionWeight = argValue(args, "--int-mc-joint-tensor-prediction-weight", "0.35");
+const intMcJointTensorTemporalRegularization = argValue(args, "--int-mc-joint-tensor-temporal-regularization", "0.015");
+const intMcJointTensorOrbitRegularization = argValue(args, "--int-mc-joint-tensor-orbit-regularization", "0.015");
+const intMcMachineLearningBackend = ["st-gnn", "costco"].includes(String(intMcCompletionBackend).toLowerCase());
 const includeFullJson = hasArg(args, "--full-json");
 const skipVerify = hasArg(args, "--skip-verify");
 const isIntMc = algorithm === "int-mc";
@@ -1235,6 +1275,24 @@ const intMcSelection = isIntMc
           intMcRank,
           "--selection-strategy",
           intMcSelectionStrategy,
+          "--planner",
+          intMcPlanner,
+          "--planner-modes",
+          intMcPlannerModes,
+          "--risk-weight",
+          intMcRiskWeight,
+          "--redundancy-weight",
+          intMcRedundancyWeight,
+          "--planning-cost-weight",
+          intMcPlanningCostWeight,
+          "--information-gain-mode",
+          intMcInformationGainMode,
+          "--metadata-actions",
+          intMcMetadataActions,
+          "--observability-mode",
+          intMcObservabilityMode,
+          "--feedback-lag-slices",
+          intMcFeedbackLagSlices,
           "--energy-guard-threshold",
           intMcEnergyGuardThreshold,
           "--energy-budget",
@@ -1247,6 +1305,20 @@ const intMcSelection = isIntMc
           intMcThresholdCalibrationHorizon,
           "--prediction-score-horizon",
           intMcPredictionScoreHorizon,
+          "--topology-versioned-objective",
+          intMcTopologyVersionedObjective,
+          "--objective-lambda-bytes",
+          intMcObjectiveLambdaBytes,
+          "--objective-lambda-energy",
+          intMcObjectiveLambdaEnergy,
+          "--objective-lambda-planning",
+          intMcObjectiveLambdaPlanning,
+          "--objective-lambda-expected-error",
+          intMcObjectiveLambdaExpectedError,
+          "--objective-lambda-aoi",
+          intMcObjectiveLambdaAoi,
+          "--objective-confidence-threshold",
+          intMcObjectiveConfidenceThreshold,
           "--cost-aware-sampling",
           intMcCostAwareSampling,
           "--cost-awareness-weight",
@@ -1373,6 +1445,48 @@ const intMcReconstruction = isIntMc
           resolvedIntMcWindowSize,
           "--iterations",
           intMcIterations,
+          "--completion-backend",
+          intMcCompletionBackend,
+          "--ml-epochs",
+          intMcMlEpochs,
+          "--ml-training-samples",
+          intMcMlTrainingSamples,
+          "--ml-hidden-units",
+          intMcMlHiddenUnits,
+          "--ml-hidden-layers",
+          intMcMlHiddenLayers,
+          "--soft-impute-lambda-ratio",
+          intMcSoftImputeLambdaRatio,
+          "--kalman-process-variance",
+          intMcKalmanProcessVariance,
+          "--kalman-measurement-variance",
+          intMcKalmanMeasurementVariance,
+          "--kalman-initial-variance",
+          intMcKalmanInitialVariance,
+          "--graph-regularization-weight",
+          intMcGraphRegularizationWeight,
+          "--temporal-regularization-weight",
+          intMcTemporalRegularizationWeight,
+          "--prior-regularization-weight",
+          intMcPriorRegularizationWeight,
+          "--low-rank-regularization-weight",
+          intMcLowRankRegularizationWeight,
+          "--joint-tensor-rank",
+          intMcJointTensorRank,
+          "--joint-tensor-epochs",
+          intMcJointTensorEpochs,
+          "--joint-tensor-learning-rate",
+          intMcJointTensorLearningRate,
+          "--joint-tensor-l2",
+          intMcJointTensorL2,
+          "--joint-tensor-prediction-weight",
+          intMcJointTensorPredictionWeight,
+          "--joint-tensor-temporal-regularization",
+          intMcJointTensorTemporalRegularization,
+          "--joint-tensor-orbit-regularization",
+          intMcJointTensorOrbitRegularization,
+          ...(String(intMcMlLatentRank).toLowerCase() === "auto" ? [] : ["--ml-latent-rank", intMcMlLatentRank]),
+          ...(intMcMlLearningRate ? ["--ml-learning-rate", intMcMlLearningRate] : []),
           "--predicted-contact-plan",
           predictedContactPlanPath,
         ])
@@ -1426,12 +1540,23 @@ const manifest = {
           target_active_link_sampling_rate: Number(intMcTargetActiveLinkSamplingRate),
           rank: Number(intMcRank),
           selection_strategy: intMcSelectionStrategy,
+          observability_mode: intMcObservabilityMode,
+          feedback_lag_slices: Number(intMcFeedbackLagSlices),
           energy_guard_threshold: Number(intMcEnergyGuardThreshold),
           energy_budget_enabled: intMcEnergyBudget.toLowerCase() !== "false",
           energy_budget_min_active_link_sampling_rate: Number(intMcEnergyBudgetMinActiveLinkSamplingRate),
           energy_budget_max_reduction: Number(intMcEnergyBudgetMaxReduction),
           threshold_calibration_horizon_slices: Number(intMcThresholdCalibrationHorizon),
           prediction_score_horizon_slices: Number(intMcPredictionScoreHorizon),
+          topology_versioned_objective_enabled: intMcTopologyVersionedObjective.toLowerCase() !== "false",
+          topology_versioned_objective_weights: {
+            bytes: Number(intMcObjectiveLambdaBytes),
+            energy: Number(intMcObjectiveLambdaEnergy),
+            planning: Number(intMcObjectiveLambdaPlanning),
+            expected_error: Number(intMcObjectiveLambdaExpectedError),
+            aoi: Number(intMcObjectiveLambdaAoi),
+          },
+          topology_versioned_objective_confidence_threshold: Number(intMcObjectiveConfidenceThreshold),
           cost_aware_sampling_enabled: intMcCostAwareSampling.toLowerCase() !== "false",
           cost_awareness_weight: Number(intMcCostAwarenessWeight),
           telemetry_byte_budget_per_slice: Number(intMcTelemetryByteBudgetPerSlice),
@@ -1446,6 +1571,42 @@ const manifest = {
           prediction_horizon_slices: Number(resolvedIntMcPredictionHorizonSlices),
           refresh_slices: Number(resolvedIntMcRefreshSlices),
           iterations: Number(intMcIterations),
+          completion_backend: intMcCompletionBackend,
+          ml_epochs: intMcMachineLearningBackend ? Number(intMcMlEpochs) : 0,
+          ml_learning_rate: intMcMachineLearningBackend && intMcMlLearningRate ? Number(intMcMlLearningRate) : null,
+          ml_training_samples: intMcMachineLearningBackend ? Number(intMcMlTrainingSamples) : 0,
+          ml_hidden_units: intMcMachineLearningBackend ? Number(intMcMlHiddenUnits) : 0,
+          ml_hidden_layers: intMcMachineLearningBackend ? Number(intMcMlHiddenLayers) : 0,
+          ml_latent_rank: intMcCompletionBackend === "costco" && String(intMcMlLatentRank).toLowerCase() !== "auto"
+            ? Number(intMcMlLatentRank)
+            : null,
+          soft_impute_lambda_ratio: ["soft-impute", "graph-regularized"].includes(String(intMcCompletionBackend).toLowerCase())
+            ? Number(intMcSoftImputeLambdaRatio)
+            : null,
+          graph_regularization_weight: String(intMcCompletionBackend).toLowerCase() === "graph-regularized"
+            ? Number(intMcGraphRegularizationWeight)
+            : null,
+          temporal_regularization_weight: String(intMcCompletionBackend).toLowerCase() === "graph-regularized"
+            ? Number(intMcTemporalRegularizationWeight)
+            : null,
+          prior_regularization_weight: String(intMcCompletionBackend).toLowerCase() === "graph-regularized"
+            ? Number(intMcPriorRegularizationWeight)
+            : null,
+          low_rank_regularization_weight: String(intMcCompletionBackend).toLowerCase() === "graph-regularized"
+            ? Number(intMcLowRankRegularizationWeight)
+            : null,
+          joint_tensor_rank: ["joint-cp", "joint-cp-physics"].includes(String(intMcCompletionBackend).toLowerCase())
+            ? Number(intMcJointTensorRank)
+            : null,
+          joint_tensor_epochs: ["joint-cp", "joint-cp-physics"].includes(String(intMcCompletionBackend).toLowerCase())
+            ? Number(intMcJointTensorEpochs)
+            : null,
+          joint_tensor_learning_rate: ["joint-cp", "joint-cp-physics"].includes(String(intMcCompletionBackend).toLowerCase())
+            ? Number(intMcJointTensorLearningRate)
+            : null,
+          joint_tensor_prediction_weight: ["joint-cp", "joint-cp-physics"].includes(String(intMcCompletionBackend).toLowerCase())
+            ? Number(intMcJointTensorPredictionWeight)
+            : null,
           predicted_contact_plan_path: predictedContactPlanPath,
           contact_plan_precision: contactPrediction?.precision ?? null,
           contact_plan_recall: contactPrediction?.recall ?? null,

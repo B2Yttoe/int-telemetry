@@ -10,7 +10,8 @@ export type LinkRestrictionReason =
   | "doppler-shift"
   | "solar-interference"
   | "link-budget"
-  | "capacity-limit";
+  | "capacity-limit"
+  | "experiment8-controlled-dynamicity";
 export type WalkerType = "star" | "delta";
 export type CoordinateFrame = "ECI" | "ECEF";
 export type InterPlaneDirection = "left" | "right" | "none";
@@ -19,7 +20,13 @@ export type SimulationMode = "autonomous" | "operational";
 export type TrafficProfile = "empty" | "low-load" | "normal" | "high-load" | "hotspot" | "burst" | "long-duration" | "uploaded";
 export type TaskType = "compute" | "routing" | "downlink" | "telemetry" | "mixed" | "background" | "burst";
 export type OrbitModel = "analytic-walker" | "tle-sgp4" | "real-tle-sgp4";
-export type TleCatalogSource = "synthetic-walker" | "synthetic-starlink-main-shell" | "celestrak" | "space-track" | "file";
+export type TleCatalogSource =
+  | "synthetic-walker"
+  | "synthetic-starlink-main-shell"
+  | "hypatia-design"
+  | "celestrak"
+  | "space-track"
+  | "file";
 export type RoutingAlgorithm = "shortest-path" | "congestion-aware-shortest-path";
 export type RoutingStatus = "routed" | "unroutable" | "local" | "not-requested";
 export type SatelliteOperationalStatus = "active" | "decaying" | "deorbited" | "backup";
@@ -573,7 +580,7 @@ export interface TleSatelliteRecord {
 }
 
 export interface RealTleCatalogSnapshot {
-  schema: "int-temerity-real-tle-snapshot/v1";
+  schema: "int-telemetry-real-tle-snapshot/v1" | "int-temerity-real-tle-snapshot/v1";
   source: TleCatalogSource;
   group: string;
   format: "celestrak-gp-json" | "tle";
@@ -715,6 +722,13 @@ export interface SimulationInput {
   orbitModel?: OrbitModel;
   routingAlgorithm?: RoutingAlgorithm;
   tleCatalogSnapshot?: RealTleCatalogSnapshot;
+  controlledLinkOutageSchedule?: ControlledLinkOutageSchedule;
+}
+
+export interface ControlledLinkOutageSchedule {
+  schema_version: "int-telemetry-controlled-link-outage/v1" | "int-temerity-controlled-link-outage/v1";
+  reason: "experiment8-controlled-dynamicity";
+  forced_down_link_ids_by_slice: Record<string, string[]>;
 }
 
 export interface SatelliteNode {

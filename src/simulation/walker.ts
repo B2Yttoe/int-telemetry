@@ -50,6 +50,7 @@ import {
 import { sunDirectionEci, sunlightState } from "./spaceEnvironment";
 import { orbitElementsFromTleRecord, propagateTleRecord, syntheticWalkerTleRecord } from "./tle";
 import { isScenarioTrafficProfile, scenarioTrafficTasks } from "./traffic";
+import { parseOrbitEpochUtcMs } from "./utcEpoch";
 
 const SIDEREAL_DAY_MINUTES = 1436.068;
 
@@ -546,8 +547,8 @@ function configForSimulation(config: WalkerNetworkConfig, input: SimulationInput
 }
 
 function tlePhaseAtReference(record: TleSatelliteRecord, referenceIso: string) {
-  const epochMs = Date.parse(record.epoch);
-  const referenceMs = Date.parse(referenceIso);
+  const epochMs = parseOrbitEpochUtcMs(record.epoch);
+  const referenceMs = parseOrbitEpochUtcMs(referenceIso);
   if (!Number.isFinite(epochMs) || !Number.isFinite(referenceMs)) {
     return normalizeDegrees(record.argument_of_perigee + record.mean_anomaly);
   }
@@ -1407,6 +1408,34 @@ function applyIslInterference(links: SatelliteLink[], nodes: SatelliteNode[], co
   });
 }
 
+function applyControlledLinkOutages(
+  links: SatelliteLink[],
+  slice: number,
+  schedule: SimulationInput["controlledLinkOutageSchedule"],
+) {
+  if (!schedule) return;
+  const forcedDown = new Set(schedule.forced_down_link_ids_by_slice[String(slice)] ?? []);
+  if (forcedDown.size === 0) return;
+  links.forEach((link) => {
+    if (!forcedDown.has(link.id)) return;
+    link.state.status = "down";
+    link.state.isActive = false;
+    link.state.restrictionReason = schedule.reason;
+    link.state.bandwidthMbps = 0;
+    link.state.utilizationPercent = 0;
+    link.state.demandTrafficMbps = 0;
+    link.state.carriedTrafficMbps = 0;
+    link.state.queuedTrafficMb = 0;
+    link.state.droppedTrafficMb = 0;
+    link.state.congestionPercent = 0;
+    if (link.state.linkBudget) {
+      link.state.linkBudget.capacity_mbps = 0;
+      link.state.linkBudget.effective_capacity_mbps = 0;
+      link.state.linkBudget.availability_factor = 0;
+    }
+  });
+}
+
 type ShortestPathResult = Pick<RoutedTaskPath, "path" | "linkIds" | "hopCount" | "distanceKm" | "latencyMs">;
 
 function nodeCanRouteTraffic(node: SatelliteNode | undefined) {
@@ -2190,6 +2219,7 @@ export function generateWalkerNetwork(config: WalkerNetworkConfig, input: Simula
     const nodes = createNodes(index, runtimeConfig, simulationInput, previousEnergyWhByNode);
     const minute = index * runtimeConfig.time.stepMinutes;
     const links = createLinks(nodes, index, runtimeConfig, antennaPointingHistory);
+    applyControlledLinkOutages(links, index, simulationInput.controlledLinkOutageSchedule);
     applyIslInterference(links, nodes, runtimeConfig);
     const groundLinks = updateGroundLinkWindows(nodes, runtimeConfig, antennaPointingHistory);
     const routingAlgorithm = simulationInput.routingAlgorithm ?? runtimeConfig.routing.algorithm;
