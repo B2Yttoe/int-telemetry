@@ -1,0 +1,27 @@
+{
+  "schema": "int-telemetry-experiment14b-v2-radar-causality-addendum/v1",
+  "status": "pre-registered-before-gp0-and-future-radar-results",
+  "purpose": "Verify the frozen Radar calibration/test split and propagate zero-fit and zero-post-update evidence into the canonical external status without changing model parameters.",
+  "minimum_calibration_points": 24,
+  "minimum_test_points": 24,
+  "maximum_hourly_gap_seconds": 5400,
+  "required_checks": [
+    "collection_after_frozen_test_window",
+    "calibration_inside_frozen_window",
+    "test_inside_frozen_window",
+    "zero_timestamp_overlap",
+    "ordered_unique_timestamps",
+    "bounded_hourly_gaps",
+    "score_reproducible_from_frozen_calibration_split",
+    "test_values_used_for_fit_zero",
+    "test_values_used_for_interval_calibration_zero",
+    "post_test_parameter_updates_zero"
+  ],
+  "overwrite_policy": "The canonical status may be augmented once before completion audit; Radar payloads, score values, coefficients, and frozen parameters may not be changed.",
+  "causality": {
+    "future_result_values_observed_by_freeze": 0,
+    "test_values_used_for_fit": 0,
+    "test_values_used_for_interval_calibration": 0,
+    "post_test_parameter_updates": 0
+  }
+}

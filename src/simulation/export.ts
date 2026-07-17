@@ -6,6 +6,7 @@ import type {
   SimulationMode,
   TaskTrafficRecord,
   TrafficProfile,
+  WalkerNetworkConfig,
 } from "./types";
 
 export interface ExperimentExportContext {
@@ -14,7 +15,7 @@ export interface ExperimentExportContext {
   orbitModel: OrbitModel;
   routingAlgorithm: RoutingAlgorithm;
   datasetName: string;
-  configSnapshot?: unknown;
+  configSnapshot?: WalkerNetworkConfig;
   taskRecords?: unknown[];
   validationSummary?: unknown;
   tleCatalogSnapshot?: RealTleCatalogSnapshot;
@@ -282,6 +283,8 @@ export function experimentMetadata(context: ExperimentExportContext, slices: Net
     tle_snapshot_satellites_per_plane: context.tleCatalogSnapshot?.layout.satellites_per_plane ?? "",
     tle_snapshot_mean_altitude_km: context.tleCatalogSnapshot?.mean_altitude_km ?? "",
     tle_snapshot_mean_inclination_deg: context.tleCatalogSnapshot?.mean_inclination_deg ?? "",
+    simulation_epoch_iso: context.configSnapshot?.time.epochIso ?? "",
+    simulation_step_minutes: context.configSnapshot?.time.stepMinutes ?? "",
     slice_count: slices.length,
     node_count: slices[0]?.nodes.length ?? 0,
     link_count: slices[0]?.links.length ?? 0,

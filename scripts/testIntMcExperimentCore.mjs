@@ -8,6 +8,8 @@ import {
   canonicalProbePlanHash,
   collectIntMcMetrics,
   runCommandTimed,
+  runIntMcCompletion,
+  runIntMcPostSelection,
   runIntMcPass,
   runTwoPassVariant,
   sha256File,
@@ -210,6 +212,8 @@ const pass = await runIntMcPass({
   maxPathsPerSlice: 2,
   observabilityMode: "oam-only",
   feedbackLagSlices: 1,
+  reportingInterruptionRate: 0.2,
+  reportingInterruptionSeed: "core-fixture",
   mechanisms: {
     adaptiveReuse: false,
     incrementalTopologyRepair: false,
@@ -244,10 +248,75 @@ assert.ok(existsSync(pass.artifacts.selector_report_json));
 assert.ok(existsSync(pass.artifacts.evaluation_json));
 const passSelectorReport = JSON.parse(await readFile(pass.artifacts.selector_report_json, "utf8"));
 assert.deepEqual(passSelectorReport.method.mechanism_flags, {
+  unified_planner: false,
   adaptive_reuse: false,
   incremental_topology_repair: false,
   forecast_risk_scoring: false,
+  topology_versioned_objective: false,
+  importance_aware_targets: false,
+  importance_metadata_only: true,
+  importance_path_scoring: false,
+  importance_selective_metadata: false,
+  importance_budget_neutral_replacement: false,
+  importance_strict_forward_only: false,
+  scale_adaptive_total_budget: true,
 });
+const passRunReport = JSON.parse(await readFile(pass.artifacts.run_report_json, "utf8"));
+assert.ok(passRunReport.planning.controlled_reporting_interruptions > 0);
+
+const completionOnly = await runIntMcCompletion({
+  label: "core-completion-only-smoke",
+  truthDir: resolve("exports/tmp-highload-check"),
+  stage2Dir: passStage2Dir,
+  groundDir: passGroundDir,
+  rank: 2,
+  windowSize: 6,
+  iterations: 1,
+  mechanisms: {
+    metricTensorCoupling: false,
+    nodeStateCoupling: false,
+    nodeEnergyPhysicsPrior: false,
+    jointStateCoupling: false,
+    orbitGraphRegularization: false,
+    orbitPeriodicPrior: false,
+    oamQualityFeedback: false,
+    businessHotspotMigrationPrior: false,
+    stateTensorJointCompletion: false,
+  },
+});
+assert.equal(completionOnly.metrics.slice_count, 24);
+assert.ok(completionOnly.timing.wall_time_ms >= 0);
+assert.equal(completionOnly.artifacts.evaluation_json, pass.artifacts.evaluation_json);
+
+const postSelection = await runIntMcPostSelection({
+  label: "core-post-selection-smoke",
+  truthDir: resolve("exports/tmp-highload-check"),
+  sourceStage2Dir: passStage2Dir,
+  telemetryStage2Dir: resolve(outputDir, "post-selection-stage2"),
+  groundDir: resolve(outputDir, "post-selection-ground"),
+  rank: 2,
+  windowSize: 6,
+  iterations: 1,
+  downlinkBudgetBytes: 1_000_000_000,
+  reportingInterruptionRate: 0.2,
+  reportingInterruptionSeed: "post-selection-fixture",
+  writeEstimateGraph: false,
+  mechanisms: {
+    metricTensorCoupling: false,
+    nodeStateCoupling: false,
+    nodeEnergyPhysicsPrior: false,
+    jointStateCoupling: false,
+    orbitGraphRegularization: false,
+    orbitPeriodicPrior: false,
+    oamQualityFeedback: false,
+    businessHotspotMigrationPrior: false,
+    stateTensorJointCompletion: false,
+  },
+});
+assert.equal(postSelection.metrics.selected_paths, pass.metrics.selected_paths);
+assert.ok(postSelection.reporting_interruption.interrupted_reports > 0);
+assert.equal(existsSync(resolve(outputDir, "post-selection-ground", "ground-oam-estimate-graph.json")), false);
+assert.deepEqual(Object.keys(postSelection.timings), ["probe_execution", "ground_oam", "matrix_completion"]);
 
 const twoPassOutputDir = resolve(outputDir, "two-pass");
 const twoPassOptions = {

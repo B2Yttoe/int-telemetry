@@ -1,0 +1,144 @@
+{
+  "schema": "int-temerity-experiment14b-prospective-validation/v1",
+  "experiment_id": "experiment14b-prospective-external-validation",
+  "title": "实验 14B：新鲜轨道、同口径用户性能与前瞻外部验证",
+  "protocol_status": "pre-registered-before-external-test-acquisition",
+  "claim_boundary": "验证公开可观测量的外部一致性；CPU、电量和队列仍是物理公式驱动的仿真潜变量",
+  "orbit": {
+    "standard_gp_url": "https://celestrak.org/NORAD/elements/gp.php?NAME=STARLINK&FORMAT=JSON",
+    "supplemental_gp_url": "https://celestrak.org/NORAD/elements/supplemental/sup-gp.php?FILE=starlink&FORMAT=JSON",
+    "minimum_catalog_records": 5000,
+    "planes": 72,
+    "satellites_per_plane": 22,
+    "raan_cluster_threshold_deg": 2.5,
+    "minimum_download_interval_hours": 2,
+    "maximum_selected_median_age_hours": 24,
+    "maximum_selected_p95_age_hours": 48,
+    "maximum_future_epoch_ratio": 0.02,
+    "future_validation_delay_hours": 24,
+    "prediction_horizons_hours": [2, 6, 12, 24, 48]
+  },
+  "topology_window": {
+    "slices": 48,
+    "step_minutes": 5,
+    "mode": "operational",
+    "traffic_profile": "empty",
+    "routing_algorithm": "congestion-aware-shortest-path"
+  },
+  "user_performance": {
+    "minimum_elevation_deg": 10,
+    "sgl_capacity_mbps": 600,
+    "gateway_capacity_mbps": 1200,
+    "fiber_speed_km_per_ms": 200,
+    "terrestrial_route_stretch": 1.35,
+    "terminal_processing_one_way_ms": 2.5,
+    "gateway_processing_one_way_ms": 1.5,
+    "server_processing_one_way_ms": 1,
+    "maximum_access_candidates": 8,
+    "maximum_gateway_candidates": 4,
+    "calibration": {
+      "rtt_offset_min_ms": 0,
+      "rtt_offset_max_ms": 250,
+      "scheduler_share_min": 0.01,
+      "scheduler_share_max": 0.8,
+      "prediction_interval_coverage": 0.95
+    },
+    "gateway_candidates": [
+      { "id": "na-west", "latitude_deg": 45.52, "longitude_deg": -122.68 },
+      { "id": "na-central", "latitude_deg": 39.1, "longitude_deg": -94.58 },
+      { "id": "na-east", "latitude_deg": 39.04, "longitude_deg": -77.49 },
+      { "id": "na-south", "latitude_deg": 32.78, "longitude_deg": -96.8 },
+      { "id": "canada-east", "latitude_deg": 43.65, "longitude_deg": -79.38 },
+      { "id": "europe-west", "latitude_deg": 50.11, "longitude_deg": 8.68 },
+      { "id": "europe-uk", "latitude_deg": 51.51, "longitude_deg": -0.13 },
+      { "id": "europe-central", "latitude_deg": 48.14, "longitude_deg": 11.58 },
+      { "id": "europe-north", "latitude_deg": 59.91, "longitude_deg": 10.75 },
+      { "id": "south-america", "latitude_deg": -23.55, "longitude_deg": -46.63 },
+      { "id": "south-america-west", "latitude_deg": -33.45, "longitude_deg": -70.66 },
+      { "id": "africa-east", "latitude_deg": -1.29, "longitude_deg": 36.82 },
+      { "id": "africa-south", "latitude_deg": -26.2, "longitude_deg": 28.04 },
+      { "id": "east-asia", "latitude_deg": 35.68, "longitude_deg": 139.76 },
+      { "id": "oceania", "latitude_deg": -33.87, "longitude_deg": 151.21 },
+      { "id": "new-zealand", "latitude_deg": -36.85, "longitude_deg": 174.76 }
+    ]
+  },
+  "mlab": {
+    "dataset_doi": "https://doi.org/10.4121/0bf59468-e5cb-433f-aeb2-e04cf694b65c.v1",
+    "dataset_url": "https://data.4tu.nl/file/0bf59468-e5cb-433f-aeb2-e04cf694b65c/47d06d33-c98d-442b-ac77-a7b71455e136",
+    "license": "CC-BY-4.0",
+    "data_source_filter": "NDT7",
+    "maximum_training_samples": 6000,
+    "maximum_test_samples": 6000,
+    "deterministic_sample_seed": 1411,
+    "training_member": {
+      "name": "Starlink-enriched-and-filtered-crowdsourced-data/filtered_isolation_forest_0.75/filtered_download_throughput_mbps_download_10_2025_with_sat_density_enriched.csv",
+      "local_header_offset": 238011373,
+      "compressed_size": 51494797,
+      "compression_method": 8
+    },
+    "test_member": {
+      "name": "Starlink-enriched-and-filtered-crowdsourced-data/filtered_isolation_forest_0.75/filtered_download_throughput_mbps_download_11_2025_with_sat_density_enriched.csv",
+      "local_header_offset": 45091368,
+      "compressed_size": 46943086,
+      "compression_method": 8
+    },
+    "excluded_test_dates_due_to_prior_repository_exposure": ["2025-11-24"],
+    "required_fields": [
+      "uuid",
+      "test_time",
+      "data_source",
+      "client_city",
+      "client_country_code",
+      "server_city",
+      "server_country_code",
+      "download_throughput_mbps",
+      "download_latency_ms",
+      "lat",
+      "lon",
+      "sat_density"
+    ]
+  },
+  "radar": {
+    "token_environment_variable": "CLOUDFLARE_API_TOKEN",
+    "asn": 14593,
+    "calibration_hours_before_freeze": 168,
+    "prospective_test_hours": 48,
+    "aggregation_interval": "1h",
+    "bot_class": "LIKELY_HUMAN",
+    "normalization": "MIN0_MAX",
+    "prediction_interval_coverage": 0.95,
+    "fit_fraction_within_calibration": 0.75,
+    "ridge_lambda": 0.000001,
+    "traffic_weight_min": 0.5,
+    "traffic_weight_max": 1.5
+  },
+  "ripe_atlas": {
+    "api_key_environment_variable": "RIPE_ATLAS_API_KEY",
+    "source_asn": 14593,
+    "requested_probes": 12,
+    "measurement_interval_seconds": 240,
+    "prospective_test_hours": 4,
+    "address_family": 4,
+    "fallback_public_measurement_id": 1001,
+    "fallback_semantics": "AS14593 探针到 K-root anycast 的公开新鲜 RTT；因目标 PoP 未知，只作为代理证据"
+  },
+  "system_cross_validation": {
+    "summary": "reports/experiment13-system-validation/experiment13-system-validation-summary.json",
+    "report": "reports/experiment13-system-validation/EXPERIMENT_13_SYSTEM_VALIDATION.md",
+    "required_evidence_status": "ns3-system-cross-validation-complete"
+  },
+  "internal_state_validity_boundary": "project-docs/EXPERIMENT_14B_VALIDITY_BOUNDARIES.md",
+  "statistics": {
+    "cdf_points": 101,
+    "bootstrap_iterations": 1000,
+    "bootstrap_seed": 1411,
+    "confidence_level": 0.95,
+    "minimum_geographic_samples": 20
+  },
+  "causality": {
+    "allow_test_target_values_for_fit": false,
+    "allow_test_target_values_for_interval_calibration": false,
+    "allow_post_test_parameter_updates": false,
+    "require_protocol_hash_unchanged": true
+  }
+}

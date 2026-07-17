@@ -1,0 +1,86 @@
+{
+  "schema": "int-telemetry-experiment14-blind-protocol/v1",
+  "experiment_id": "experiment14-multisource-external-blind-validation",
+  "title": "实验 14：多源外部盲测验证",
+  "protocol_status": "pre-registered-before-formal-acquisition",
+  "model": {
+    "orbit_input": "data/tle-snapshots/celestrak-starlink-real-walker-72x22.json",
+    "truth_root": "reports/experiment1-satellite-data-authenticity/stage1-truth",
+    "traffic_metadata": "reports/experiment1-satellite-data-authenticity/input/radar-fitted-traffic.metadata.json",
+    "traffic_calibration_profile": "traffic-calibration/cloudflare-radar-profile.json",
+    "model_throughput_field": "carried_traffic_mbps",
+    "model_rtt_semantics": "user-satellite-regional-gateway-rtt",
+    "model_throughput_semantics": "delivered-internal-task-rate-proxy"
+  },
+  "orbit": {
+    "historical_calibration_csv": "reports/experiment9-multi-epoch-external-validation/orbit-cross-epoch-comparison.csv",
+    "live_gp_url": "https://celestrak.org/NORAD/elements/gp.php?NAME=STARLINK&FORMAT=JSON",
+    "live_supgp_url": "https://celestrak.org/NORAD/elements/supplemental/sup-gp.php?FILE=starlink&FORMAT=JSON",
+    "error_envelope_quantile": 0.95,
+    "minimum_epoch_separation_hours": 1
+  },
+  "radar": {
+    "source": "reports/_archive/experiment1-pre-final-20260703-211932/experiment1-external-realism-72x22/external/cloudflare-radar/radar-as14593-traffic.json",
+    "train_fraction": 0.5,
+    "fit_fraction_within_train": 0.75,
+    "features": [
+      "intercept",
+      "linear_trend",
+      "sin_24h",
+      "cos_24h",
+      "sin_12h",
+      "cos_12h"
+    ],
+    "ridge_lambda": 0.000001,
+    "prediction_interval": "split-conformal-absolute-residual",
+    "prediction_interval_coverage": 0.95,
+    "traffic_weight_min": 0.5,
+    "traffic_weight_max": 1.5
+  },
+  "ripe_atlas": {
+    "asn": 14593,
+    "measurement_id": 1001,
+    "window_hours": 4,
+    "maximum_public_probes": 16,
+    "minimum_elevation_deg": 10,
+    "processing_one_way_ms": 3,
+    "terrestrial_tail_one_way_ms": 4
+  },
+  "mlab": {
+    "dataset_doi": "https://doi.org/10.4121/0bf59468-e5cb-433f-aeb2-e04cf694b65c.v1",
+    "dataset_url": "https://data.4tu.nl/file/0bf59468-e5cb-433f-aeb2-e04cf694b65c/47d06d33-c98d-442b-ac77-a7b71455e136",
+    "license": "CC-BY-4.0",
+    "test_start": "2025-11-24",
+    "test_end": "2025-11-30",
+    "data_source_filter": "NDT7",
+    "maximum_samples_per_metric": 5000,
+    "maximum_paired_model_samples": 1000,
+    "deterministic_sample_seed": 1401,
+    "throughput_member": {
+      "name": "Starlink-enriched-and-filtered-crowdsourced-data/filtered_isolation_forest_0.75/filtered_download_throughput_nov24_only.csv",
+      "local_header_offset": 289506832,
+      "compressed_size": 1116992,
+      "compression_method": 8
+    },
+    "latency_member": {
+      "name": "Starlink-enriched-and-filtered-crowdsourced-data/filtered_percentile_0.75/filtered_download_latency_nov24_only.csv",
+      "local_header_offset": 659441336,
+      "compressed_size": 1552661,
+      "compression_method": 8
+    }
+  },
+  "statistics": {
+    "cdf_points": 101,
+    "bootstrap_iterations": 1000,
+    "bootstrap_seed": 1401,
+    "confidence_level": 0.95,
+    "minimum_geographic_samples": 20,
+    "maximum_geographic_groups": 12
+  },
+  "reporting": {
+    "report_successes": true,
+    "report_biases": true,
+    "allow_test_set_parameter_updates": false,
+    "claim_boundary": "公开可观测维度的外部一致性，不声称运营商内部状态逐点真实"
+  }
+}

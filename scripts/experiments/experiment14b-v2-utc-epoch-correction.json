@@ -1,0 +1,26 @@
+{
+  "schema": "int-telemetry-experiment14b-v2-utc-epoch-correction/v1",
+  "status": "pre-registered-before-corrected-freeze-and-all-future-external-results",
+  "corrected_experiment_id": "experiment14b-prospective-external-validation-v2-utc-corrected",
+  "retired_experiment_directory": "reports/experiment14b-prospective-external-validation-v2",
+  "retirement_record": "reports/experiment14b-prospective-external-validation-v2/UTC_EPOCH_RETIREMENT.json",
+  "defect": "Zone-less CCSDS OMM EPOCH strings were parsed as local time by JavaScript freshness and Walker phase calculations.",
+  "correction": [
+    "Normalize zone-less OMM EPOCH values to explicit UTC before Date parsing.",
+    "Use the same UTC parser for freshness, shell sampling, Walker runtime slot ordering, generated TLE epochs, and GP1 median comparison time.",
+    "Require plane-slot sampling to be invariant between Asia/Shanghai and UTC process timezones."
+  ],
+  "unchanged": [
+    "satellite.js json2satrec SGP4 propagation",
+    "Walker constellation size and link rules",
+    "user-performance model and calibration parameters",
+    "strict pairing thresholds",
+    "Radar, RIPE, and M-Lab test-data leakage rules",
+    "ns-3 evidence and internal-state claim boundary"
+  ],
+  "causality": {
+    "retired_before_gp1_radar_ripe_mlab_future_results": true,
+    "future_result_values_used_to_design_fix": 0,
+    "corrected_run_requires_new_freeze_gp0_and_external_windows": true
+  }
+}

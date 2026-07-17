@@ -102,6 +102,10 @@ export function buildObservablePlanningLinks({
       planner_state_source: oam ? "ground-oam" : "predictable-contact-only",
       planner_state_source_slice_index: oam ? numberOr(oam.slice_index, oamSourceSliceIndex) : "",
       planner_state_confidence: numberOr(oam?.confidence, 0),
+      state_age_slices: numberOr(oam?.state_age_slices, ""),
+      last_observed_slice: firstDefined(oam?.last_observed_slice, ""),
+      confidence_state: firstDefined(oam?.confidence_state, oam ? "observed" : "unknown"),
+      conflict_severity: numberOr(firstDefined(oam?.conflict_severity, oam?.oam_conflict_severity), 0),
       planner_observability_mode: "oam-only",
     };
     copyDefined(row, { ...physical, ...entry }, [
@@ -156,6 +160,10 @@ export function buildObservablePlanningNodes({
       planner_state_source: oam ? "ground-oam" : "predictable-context-only",
       planner_state_source_slice_index: oam ? numberOr(oam.slice_index, oamSourceSliceIndex) : "",
       planner_state_confidence: numberOr(oam?.confidence, 0),
+      state_age_slices: numberOr(oam?.state_age_slices, ""),
+      last_observed_slice: firstDefined(oam?.last_observed_slice, ""),
+      confidence_state: firstDefined(oam?.confidence_state, oam ? "observed" : "unknown"),
+      conflict_severity: numberOr(firstDefined(oam?.conflict_severity, oam?.oam_conflict_severity), 0),
       planner_observability_mode: "oam-only",
       oam_observation_source: firstDefined(oam?.observation_source, "unknown"),
     };

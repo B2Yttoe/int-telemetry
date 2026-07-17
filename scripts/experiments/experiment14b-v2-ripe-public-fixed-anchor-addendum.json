@@ -1,0 +1,49 @@
+{
+  "schema": "int-telemetry-experiment14b-v2-ripe-public-fixed-anchor-addendum/v1",
+  "experiment_id": "experiment14b-prospective-external-validation-v2-utc-corrected",
+  "source_role": "prospective fixed-endpoint RTT evidence without RIPE measurement-creation credentials",
+  "measurement": {
+    "id": 34468267,
+    "type": "ping",
+    "address_family": 4,
+    "interval_seconds": 240,
+    "target_fqdn": "ae-dxb-as15412-client.anchors.atlas.ripe.net",
+    "target_ipv4": "80.77.4.60"
+  },
+  "anchor": {
+    "id": 2825,
+    "city": "Dubai",
+    "country": "AE",
+    "latitude_deg": 25.0264601,
+    "longitude_deg": 55.1868599
+  },
+  "source_probe": {
+    "id": 1003040,
+    "asn": 14593,
+    "require_public": true,
+    "require_connected_at_collection": true
+  },
+  "window": {
+    "source": "gp0-lock topology_start/topology_end",
+    "minimum_results": 20,
+    "maximum_topology_time_offset_seconds": 150
+  },
+  "metric": {
+    "external_rtt_field": "min",
+    "unit": "ms",
+    "semantics": "minimum of the three ICMP RTT samples in each RIPE Atlas ping result"
+  },
+  "causality": {
+    "measurement_probe_and_anchor_frozen_before_gp0": true,
+    "future_result_values_used_for_source_selection": false,
+    "test_values_used_for_fit": false,
+    "post_test_parameter_updates_allowed": false
+  },
+  "excluded": [
+    "K-root or another anycast target",
+    "a probe outside AS14593",
+    "results outside the frozen GP0 topology window",
+    "historical results collected before GP0"
+  ],
+  "claim_boundary": "The public measurement is acceptable because its endpoint is one fixed RIPE Anchor with a stable IP and direct coordinates. Public anycast measurements remain non-strict proxy evidence."
+}

@@ -1,6 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { applyControlledReportingInterruptions } from "./reporting-interruption.mjs";
+import { selectBudgetAdmittedProbeIds } from "./telemetry-byte-budget.mjs";
 
 function argValue(args, name, fallback = "") {
   const index = args.indexOf(name);
@@ -154,29 +156,120 @@ function addLinkLoad(map, { sliceIndex, time, linkId, loadType, bytes, packets =
   map.set(key, row);
 }
 
+function effectiveHopMetadataBytesForProbe(probe, fallback) {
+  const value = numberValue(probe?.effective_hop_metadata_bytes, NaN);
+  if (Number.isFinite(value) && value > 0) return value;
+  return fallback;
+}
+
+function mandatoryTargetsForProbe(probe) {
+  const importanceNodes = new Set();
+  const importanceLinks = new Set(splitPath(probe?.importance_adjacent_link_target_ids));
+  splitPath(probe?.planning_importance_repair_target_ids).forEach((targetId) => {
+    const separator = targetId.indexOf("|");
+    if (separator <= 0) return;
+    const type = targetId.slice(0, separator);
+    const id = targetId.slice(separator + 1);
+    if (!id) return;
+    if (type === "node") importanceNodes.add(id);
+    if (type === "link") importanceLinks.add(id);
+  });
+  return {
+    nodes: new Set([
+      ...splitPath(probe?.oam_feedback_mandatory_node_target_ids),
+      ...splitPath(probe?.oam_control_mandatory_node_target_ids),
+      ...importanceNodes,
+    ]),
+    links: new Set([
+      ...splitPath(probe?.oam_feedback_mandatory_link_target_ids),
+      ...splitPath(probe?.oam_control_mandatory_link_target_ids),
+      ...importanceLinks,
+    ]),
+  };
+}
+
+function parseSelectiveMetadataPlan(probe, pathLength) {
+  if (!boolValue(probe?.selective_metadata_enabled)) return [];
+  try {
+    const parsed = JSON.parse(String(probe?.selective_metadata_plan_json ?? "[]"));
+    if (!Array.isArray(parsed) || parsed.length !== pathLength) return [];
+    return parsed.map((item, hopIndex) => ({
+      hop_index: hopIndex,
+      profile: String(item?.profile ?? "forward-only"),
+      node_fields_present: Array.isArray(item?.node_fields_present) ? item.node_fields_present.map(String) : [],
+      link_fields_present: Array.isArray(item?.link_fields_present) ? item.link_fields_present.map(String) : [],
+      metadata_bytes: Math.max(0, numberValue(item?.metadata_bytes)),
+      writes_observation: item?.writes_observation === true ||
+        (Array.isArray(item?.node_fields_present) && item.node_fields_present.length > 0) ||
+        (Array.isArray(item?.link_fields_present) && item.link_fields_present.length > 0),
+      reason: String(item?.reason ?? ""),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function maskedValue(enabled, fields, field, value, fallback = "") {
+  if (!enabled) return value;
+  return fields.has(field) ? value : fallback;
+}
+
+const SELECTIVE_LINK_LIGHT_FIELDS = Object.freeze([
+  "link_id",
+  "status",
+  "is_active",
+  "utilization_percent",
+  "queue_latency_ms",
+]);
+
+const SELECTIVE_LINK_CORE_FIELDS = Object.freeze([
+  "link_id",
+  "status",
+  "is_active",
+  "utilization_percent",
+  "latency_ms",
+  "queue_latency_ms",
+  "effective_capacity_mbps",
+  "queued_traffic_mb",
+  "dropped_traffic_mb",
+  "congestion_percent",
+  "packet_error_rate",
+]);
+
 function buildOverheadBySlice({
   allSlices = [],
   hopRecords,
   reports,
+  probePaths = [],
+  forwardingEvents = [],
   hopMetadataBytes,
   probePacketBaseBytes = 0,
   probeCountsBySlice = new Map(),
   reportHeaderBytes,
   hopProcessingJ,
+  forwardOnlyProcessingJ,
   reportProcessingJ,
   telemetryTxNjPerByte,
 }) {
   const hopsBySlice = groupBy(hopRecords, (record) => String(record.slice_index));
   const reportsBySlice = groupBy(reports, (report) => String(report.slice_index));
+  const probesBySlice = groupBy(probePaths, (probe) => String(probe.slice_index));
+  const forwardingBySlice = groupBy(forwardingEvents, (event) => String(event.slice_index));
   const sliceIndexes = [...new Set([...allSlices.map(String), ...hopsBySlice.keys(), ...reportsBySlice.keys()])];
   return sortedNumericKeys(new Map(sliceIndexes.map((sliceIndex) => [sliceIndex, true]))).map((sliceIndex) => {
     const hops = hopsBySlice.get(sliceIndex) ?? [];
     const sliceReports = reportsBySlice.get(sliceIndex) ?? [];
-    const metadataBytes = hops.length * hopMetadataBytes;
+    const metadataBytes = hops.reduce((total, hop) => total + numberValue(hop.hop_metadata_bytes, hopMetadataBytes), 0);
     const reportBytes = sliceReports.reduce((total, report) => total + numberValue(report.report_size_bytes), 0);
     const baseBytes = (probeCountsBySlice.get(String(sliceIndex)) ?? 0) * probePacketBaseBytes;
-    const totalGeneratedBytes = metadataBytes + reportBytes + baseBytes;
-    const processingEnergyJ = hops.length * hopProcessingJ + sliceReports.length * reportProcessingJ;
+    const targetMaskBytes = (probesBySlice.get(sliceIndex) ?? []).reduce(
+      (total, probe) => total + Math.max(0, numberValue(probe.target_mask_bytes)),
+      0,
+    );
+    const forwarding = forwardingBySlice.get(sliceIndex) ?? [];
+    const forwardOnlyHops = forwarding.filter((event) => !event.writes_observation).length;
+    const totalGeneratedBytes = metadataBytes + reportBytes + baseBytes + targetMaskBytes;
+    const processingEnergyJ = hops.length * hopProcessingJ + forwardOnlyHops * forwardOnlyProcessingJ + sliceReports.length * reportProcessingJ;
     const txEnergyJ = totalGeneratedBytes * telemetryTxNjPerByte * 1e-9;
     return {
       slice_index: Number(sliceIndex),
@@ -186,12 +279,17 @@ function buildOverheadBySlice({
       generated_reports: sliceReports.filter((report) => report.status === "generated").length,
       dropped_reports: sliceReports.filter((report) => report.status === "dropped").length,
       hop_metadata_bytes: hopMetadataBytes,
+      mean_effective_hop_metadata_bytes: round(mean(hops.map((hop) => numberValue(hop.hop_metadata_bytes, hopMetadataBytes)))),
       probe_packet_base_bytes: probePacketBaseBytes,
       report_header_bytes: reportHeaderBytes,
       metadata_bytes: metadataBytes,
       report_bytes: reportBytes,
       total_probe_packet_base_bytes: baseBytes,
-      total_int_bytes: metadataBytes + reportBytes,
+      target_mask_bytes: targetMaskBytes,
+      metadata_writing_hops: hops.length,
+      forward_only_hops: forwardOnlyHops,
+      forwarding_hops: forwarding.length,
+      total_int_bytes: metadataBytes + reportBytes + targetMaskBytes,
       total_telemetry_generated_bytes: totalGeneratedBytes,
       processing_energy_j: round(processingEnergyJ),
       tx_energy_j: round(txEnergyJ),
@@ -204,17 +302,25 @@ function buildOverheadBySlice({
 function buildLinkOverhead({ probePaths, reports, reportingByProbeId, probePacketBaseBytes, hopMetadataBytes }) {
   const map = new Map();
   probePaths.forEach((probe) => {
+    const effectiveHopMetadataBytes = effectiveHopMetadataBytesForProbe(probe, hopMetadataBytes);
+    const selectivePlan = parseSelectiveMetadataPlan(probe, splitPath(probe.path).length);
+    const targetMaskBytes = selectivePlan ? Math.max(0, numberValue(probe.target_mask_bytes)) : 0;
+    let cumulativeMetadataBytes = 0;
     splitPath(probe.link_ids).forEach((linkId, index) => {
+      cumulativeMetadataBytes += selectivePlan
+        ? Math.max(0, numberValue(selectivePlan[index]?.metadata_bytes))
+        : effectiveHopMetadataBytes;
       addLinkLoad(map, {
         sliceIndex: probe.slice_index,
         time: probe.time,
         linkId,
         loadType: "probe",
-        bytes: probePacketBaseBytes + (index + 1) * hopMetadataBytes,
+        bytes: probePacketBaseBytes + targetMaskBytes + cumulativeMetadataBytes,
       });
     });
   });
   reports.forEach((report) => {
+    if (String(report.status ?? "generated").toLowerCase() !== "generated") return;
     const reporting = reportingByProbeId.get(report.probe_id) ?? {};
     splitPath(reporting.reporting_link_ids).forEach((linkId) => {
       addLinkLoad(map, {
@@ -251,6 +357,8 @@ function buildNodeOverhead({
   hopProcessingJ,
   reportProcessingJ,
   telemetryTxNjPerByte,
+  forwardingEvents = [],
+  forwardOnlyProcessingJ = 0,
 }) {
   const nodeByKey = indexBy(nodes, (node) => `${node.slice_index}|${node.node_id}`);
   const map = new Map();
@@ -299,25 +407,43 @@ function buildNodeOverhead({
 
   hopRecords.forEach((record) => {
     const row = ensure(record.slice_index, record.node_id, record.time);
+    const effectiveHopMetadataBytes = numberValue(record.hop_metadata_bytes, hopMetadataBytes);
     row.hop_records += 1;
     if (record.observation_scope === "local-adjacent-link") row.adjacent_scan_records += 1;
     else row.path_hop_records += 1;
     if (record.role === "source") row.source_hop_records += 1;
     else if (record.role === "sink") row.sink_hop_records += 1;
     else if (record.role === "transit") row.transit_hop_records += 1;
-    row.metadata_bytes_added += hopMetadataBytes;
+    row.metadata_bytes_added += effectiveHopMetadataBytes;
     row.processing_energy_j += hopProcessingJ;
     row.telemetry_cpu_cost_units += 1;
   });
 
+  forwardingEvents.filter((event) => !event.writes_observation).forEach((event) => {
+    const row = ensure(event.slice_index, event.node_id, event.time);
+    row.path_hop_records += 1;
+    if (event.role === "source") row.source_hop_records += 1;
+    else if (event.role === "sink") row.sink_hop_records += 1;
+    else if (event.role === "transit") row.transit_hop_records += 1;
+    row.processing_energy_j += forwardOnlyProcessingJ;
+    row.telemetry_cpu_cost_units += 0.1;
+  });
+
   probePaths.forEach((probe) => {
     const path = splitPath(probe.path);
+    const effectiveHopMetadataBytes = effectiveHopMetadataBytesForProbe(probe, hopMetadataBytes);
+    const selectivePlan = parseSelectiveMetadataPlan(probe, path.length);
+    const targetMaskBytes = selectivePlan ? Math.max(0, numberValue(probe.target_mask_bytes)) : 0;
+    let cumulativeMetadataBytes = 0;
     splitPath(probe.link_ids).forEach((linkId, index) => {
       if (!linkId) return;
       const nodeId = path[index];
       if (!nodeId) return;
       const row = ensure(probe.slice_index, nodeId, probe.time);
-      row.probe_packet_tx_bytes += probePacketBaseBytes + (index + 1) * hopMetadataBytes;
+      cumulativeMetadataBytes += selectivePlan
+        ? Math.max(0, numberValue(selectivePlan[index]?.metadata_bytes))
+        : effectiveHopMetadataBytes;
+      row.probe_packet_tx_bytes += probePacketBaseBytes + targetMaskBytes + cumulativeMetadataBytes;
     });
   });
 
@@ -400,10 +526,17 @@ const hopMetadataBytes = numberValue(argValue(args, "--hop-bytes", "96"), 96);
 const probePacketBaseBytes = numberValue(argValue(args, "--probe-packet-base-bytes", "64"), 64);
 const reportHeaderBytes = numberValue(argValue(args, "--report-header-bytes", "128"), 128);
 const hopProcessingJ = numberValue(argValue(args, "--hop-processing-j", "0.02"), 0.02);
+const forwardOnlyProcessingJ = numberValue(argValue(args, "--forward-only-processing-j", String(hopProcessingJ * 0.1)), hopProcessingJ * 0.1);
 const reportProcessingJ = numberValue(argValue(args, "--report-processing-j", "0.05"), 0.05);
 const telemetryTxNjPerByte = numberValue(argValue(args, "--telemetry-tx-nj-per-byte", "120"), 120);
 const lowEnergyScanThresholdPercent = numberValue(argValue(args, "--low-energy-scan-threshold-percent", "20"), 20);
 const lowEnergyAdjacentScanRatio = Math.max(0, Math.min(1, numberValue(argValue(args, "--low-energy-adjacent-scan-ratio", "0.25"), 0.25)));
+const reportingInterruptionRate = Math.max(0, Math.min(1, numberValue(argValue(args, "--reporting-interruption-rate", "0"), 0)));
+const reportingInterruptionSeed = argValue(args, "--reporting-interruption-seed", "reporting-interruption");
+const invalidProbePolicy = argValue(args, "--invalid-probe-policy", "observe-down").toLowerCase();
+const telemetryByteBudgetPerSlice = Math.max(0, numberValue(argValue(args, "--telemetry-byte-budget-per-slice", "0"), 0));
+const telemetryByteBudgetPerNodeSlice = Math.max(0, numberValue(argValue(args, "--telemetry-byte-budget-per-node-slice", "0"), 0));
+const telemetryByteBudgetPadToCap = argValue(args, "--telemetry-byte-budget-pad-to-cap", "false").toLowerCase() === "true";
 
 const nodesPath = resolve(argValue(args, "--nodes", join(inputDir, "nodes.csv")));
 const linksPath = resolve(argValue(args, "--links", join(inputDir, "links.csv")));
@@ -431,11 +564,14 @@ links.forEach((link) => {
 });
 const reportingByProbeId = indexBy(reportingPaths, (reportingPath) => reportingPath.probe_id);
 
-const hopRecords = [];
-const reports = [];
+let hopRecords = [];
+let reports = [];
+let forwardingEvents = [];
+let invalidProbePaths = 0;
 const scannedNodeKeys = new Set();
 let lowEnergyScanLimitedNodes = 0;
 let suppressedAdjacentLinkScans = 0;
+let targetAwareSuppressedAdjacentScans = 0;
 
 function adjacentScanAllowed({ node, scannedNodeKey, adjacentIndex }) {
   const energy = numberValue(node.energy_percent, 100);
@@ -455,15 +591,25 @@ function buildRecord({
   path,
   nodeId,
   hopIndex,
+  effectiveHopMetadataBytes,
+  effectiveLinkObservationMode,
   ingressLinkId,
   egressLinkId,
   observedLink,
   observationScope,
   localPortPeer,
+  oamTargetRecord = false,
+  oamTransitRecord = false,
+  selectiveMetadataEnabled = false,
+  selectiveMetadataProfile = "",
+  nodeFieldsPresent = [],
+  linkFieldsPresent = [],
 }) {
   const node = nodesBySliceAndId.get(`${probe.slice_index}|${nodeId}`) ?? {};
   const totalLatencyMs = numberValue(observedLink.latency_ms);
   const queueLatencyMs = estimateQueueLatencyMs(observedLink);
+  const nodeFieldSet = new Set(nodeFieldsPresent);
+  const linkFieldSet = new Set(linkFieldsPresent);
   return {
     packet_id: packetId,
     probe_id: probe.probe_id,
@@ -473,6 +619,14 @@ function buildRecord({
     slice_index: probe.slice_index,
     time: probe.time,
     hop_index: hopIndex,
+    adaptive_metadata_profile: probe.adaptive_metadata_profile ?? "standard",
+    adaptive_link_observation_mode: effectiveLinkObservationMode,
+    hop_metadata_bytes: effectiveHopMetadataBytes,
+    metadata_compression_ratio: probe.metadata_compression_ratio ?? "",
+    selective_metadata_enabled: selectiveMetadataEnabled,
+    selective_metadata_profile: selectiveMetadataProfile,
+    node_fields_present: selectiveMetadataEnabled ? nodeFieldsPresent.join("|") : "legacy-all",
+    link_fields_present: selectiveMetadataEnabled ? linkFieldsPresent.join("|") : "legacy-all",
     node_id: nodeId,
     role: roleForHop(path, hopIndex),
     previous_hop: hopIndex > 0 ? path[hopIndex - 1] : "",
@@ -481,26 +635,43 @@ function buildRecord({
     egress_link_id: egressLinkId,
     observation_scope: observationScope,
     local_port_peer: localPortPeer,
-    observed_node_mode: node.mode ?? "unknown",
-    observed_cpu_percent: numberValue(node.cpu_percent),
-    observed_queue_depth: numberValue(node.queue_depth),
-    observed_queued_traffic_mb: numberValue(node.queued_traffic_mb),
-    observed_cache_used_mb: numberValue(node.cache_used_mb),
-    observed_energy_percent: numberValue(node.energy_percent),
-    observed_can_accept_tasks: node.can_accept_tasks ?? "",
-    observed_link_id: observedLink.link_id ?? "",
-    observed_link_status: observedLink.status ?? "",
-    observed_link_active: observedLink.is_active ?? "",
-    observed_link_utilization_percent: numberValue(observedLink.utilization_percent),
-    observed_link_latency_ms: totalLatencyMs,
-    observed_link_queue_latency_ms: queueLatencyMs,
-    observed_link_propagation_latency_ms: round(Math.max(totalLatencyMs - queueLatencyMs, 0)),
-    observed_link_queue_latency_formula: observedLink.link_id ? "queued_traffic_mb*8*1000/effective_capacity_mbps" : "",
-    observed_link_capacity_mbps: numberValue(observedLink.effective_capacity_mbps || observedLink.capacity_mbps),
-    observed_link_congestion_percent: numberValue(observedLink.congestion_percent),
-    observed_link_queued_mb: numberValue(observedLink.queued_traffic_mb),
-    observed_link_dropped_mb: numberValue(observedLink.dropped_traffic_mb),
-    observed_link_packet_error_rate: numberValue(observedLink.packet_error_rate),
+    oam_target_record: oamTargetRecord,
+    oam_transit_record: oamTransitRecord,
+    observed_node_mode: maskedValue(selectiveMetadataEnabled, nodeFieldSet, "mode", node.mode ?? "unknown"),
+    observed_cpu_percent: maskedValue(selectiveMetadataEnabled, nodeFieldSet, "cpu_percent", numberValue(node.cpu_percent)),
+    observed_queue_depth: maskedValue(selectiveMetadataEnabled, nodeFieldSet, "queue_depth", numberValue(node.queue_depth)),
+    observed_queued_traffic_mb: maskedValue(selectiveMetadataEnabled, nodeFieldSet, "queued_traffic_mb", numberValue(node.queued_traffic_mb)),
+    observed_cache_used_mb: maskedValue(selectiveMetadataEnabled, nodeFieldSet, "cache_used_mb", numberValue(node.cache_used_mb)),
+    observed_energy_percent: maskedValue(selectiveMetadataEnabled, nodeFieldSet, "energy_percent", numberValue(node.energy_percent)),
+    observed_can_accept_tasks: maskedValue(selectiveMetadataEnabled, nodeFieldSet, "can_accept_tasks", node.can_accept_tasks ?? ""),
+    observed_link_id: maskedValue(selectiveMetadataEnabled, linkFieldSet, "link_id", observedLink.link_id ?? ""),
+    observed_link_status: maskedValue(selectiveMetadataEnabled, linkFieldSet, "status", observedLink.status ?? ""),
+    observed_link_active: maskedValue(selectiveMetadataEnabled, linkFieldSet, "is_active", observedLink.is_active ?? ""),
+    observed_link_utilization_percent: maskedValue(selectiveMetadataEnabled, linkFieldSet, "utilization_percent", numberValue(observedLink.utilization_percent)),
+    observed_link_latency_ms: maskedValue(selectiveMetadataEnabled, linkFieldSet, "latency_ms", totalLatencyMs),
+    observed_link_queue_latency_ms: maskedValue(selectiveMetadataEnabled, linkFieldSet, "queue_latency_ms", queueLatencyMs),
+    observed_link_propagation_latency_ms: maskedValue(
+      selectiveMetadataEnabled,
+      linkFieldSet,
+      "latency_ms",
+      round(Math.max(totalLatencyMs - queueLatencyMs, 0)),
+    ),
+    observed_link_queue_latency_formula: maskedValue(
+      selectiveMetadataEnabled,
+      linkFieldSet,
+      "queue_latency_ms",
+      observedLink.link_id ? "queued_traffic_mb*8*1000/effective_capacity_mbps" : "",
+    ),
+    observed_link_capacity_mbps: maskedValue(
+      selectiveMetadataEnabled,
+      linkFieldSet,
+      "effective_capacity_mbps",
+      numberValue(observedLink.effective_capacity_mbps || observedLink.capacity_mbps),
+    ),
+    observed_link_congestion_percent: maskedValue(selectiveMetadataEnabled, linkFieldSet, "congestion_percent", numberValue(observedLink.congestion_percent)),
+    observed_link_queued_mb: maskedValue(selectiveMetadataEnabled, linkFieldSet, "queued_traffic_mb", numberValue(observedLink.queued_traffic_mb)),
+    observed_link_dropped_mb: maskedValue(selectiveMetadataEnabled, linkFieldSet, "dropped_traffic_mb", numberValue(observedLink.dropped_traffic_mb)),
+    observed_link_packet_error_rate: maskedValue(selectiveMetadataEnabled, linkFieldSet, "packet_error_rate", numberValue(observedLink.packet_error_rate)),
     carried_traffic_mbps: 0,
     demand_traffic_mbps: 0,
   };
@@ -509,10 +680,61 @@ function buildRecord({
 probePaths.forEach((probe, probeIndex) => {
   const path = splitPath(probe.path);
   const linkIds = splitPath(probe.link_ids);
+  const selectivePlan = parseSelectiveMetadataPlan(probe, path.length);
+  const selectiveMetadataEnabled = selectivePlan.length === path.length && selectivePlan.length > 0;
+  const targetMaskBytes = selectiveMetadataEnabled ? Math.max(0, numberValue(probe.target_mask_bytes)) : 0;
+  const effectiveHopMetadataBytes = effectiveHopMetadataBytesForProbe(probe, hopMetadataBytes);
+  const effectiveLinkObservationMode = probe.adaptive_link_observation_mode || linkObservationMode;
+  const targetAware = probe.adaptive_metadata_profile === "oam-target-aware" || effectiveLinkObservationMode === "target-neighborhood";
+  const mandatoryTargets = mandatoryTargetsForProbe(probe);
+  const targetHopMetadataBytes = numberValue(probe.target_hop_metadata_bytes, hopMetadataBytes);
+  const transitHopMetadataBytes = numberValue(probe.transit_hop_metadata_bytes, effectiveHopMetadataBytes);
   const reporting = reportingByProbeId.get(probe.probe_id) ?? {};
   const reportingStatus = reporting.reporting_status || "unknown";
   const packetId = `PROBE-INT-${probe.probe_id || `${String(probe.slice_index).padStart(2, "0")}-${probeIndex}`}`;
   const packetHopRecords = [];
+  const invalidProbeLinkId = invalidProbePolicy === "drop"
+    ? linkIds.find((linkId) => {
+        const link = linksBySliceAndId.get(`${probe.slice_index}|${linkId}`);
+        if (!link) return true;
+        const status = String(link.status ?? "").toLowerCase();
+        const active = String(link.is_active ?? "true").toLowerCase() !== "false";
+        return status === "down" || !active;
+      }) ?? ""
+    : "";
+  if (invalidProbeLinkId) {
+    invalidProbePaths += 1;
+    reports.push({
+      report_id: `REPORT-${packetId}`,
+      packet_id: packetId,
+      task_id: probe.probe_id,
+      probe_id: probe.probe_id,
+      probe_type: "probe-int",
+      planning_algorithm: probe.planning_algorithm || algorithm,
+      slice_index: probe.slice_index,
+      time: probe.time,
+      sink_node: probe.sink || path[path.length - 1] || "",
+      ground_station: "",
+      direct_linked_satellite: reporting.direct_linked_satellite ?? "",
+      reporting_status: "probe-path-failed",
+      reporting_hops: "",
+      reporting_latency_ms: "",
+      reporting_path: "",
+      reporting_link_ids: "",
+      record_count: 0,
+      adaptive_metadata_profile: probe.adaptive_metadata_profile ?? "standard",
+      adaptive_link_observation_mode: effectiveLinkObservationMode,
+      hop_metadata_bytes: effectiveHopMetadataBytes,
+      metadata_compression_ratio: probe.metadata_compression_ratio ?? "",
+      selective_metadata_enabled: selectiveMetadataEnabled,
+      target_mask_bytes: targetMaskBytes,
+      report_size_bytes: 0,
+      status: "dropped",
+      drop_reason: `invalid-probe-path:${invalidProbeLinkId}`,
+      invalid_probe_link_id: invalidProbeLinkId,
+    });
+    return;
+  }
 
   path.forEach((nodeId, hopIndex) => {
     const ingressLinkId = hopIndex > 0 ? linkIds[hopIndex - 1] ?? "" : "";
@@ -522,6 +744,27 @@ probePaths.forEach((probe, probeIndex) => {
       : ingressLinkId
         ? linksBySliceAndId.get(`${probe.slice_index}|${ingressLinkId}`) ?? {}
         : {};
+    const forwardingTargetRecord = targetAware && (
+      mandatoryTargets.nodes.has(nodeId) ||
+      mandatoryTargets.links.has(ingressLinkId) ||
+      mandatoryTargets.links.has(egressLinkId)
+    );
+    const forwardingMetadataBytes = targetAware
+      ? forwardingTargetRecord ? targetHopMetadataBytes : transitHopMetadataBytes
+      : effectiveHopMetadataBytes;
+    const selectiveDecision = selectiveMetadataEnabled ? selectivePlan[hopIndex] : null;
+    forwardingEvents.push({
+      probe_id: probe.probe_id,
+      slice_index: probe.slice_index,
+      time: probe.time,
+      hop_index: hopIndex,
+      node_id: nodeId,
+      profile: selectiveDecision?.profile ?? "legacy-metadata",
+      metadata_bytes: selectiveDecision?.metadata_bytes ?? forwardingMetadataBytes,
+      writes_observation: selectiveDecision ? selectiveDecision.writes_observation : true,
+      target_mask_bytes: targetMaskBytes,
+    });
+    if (selectiveDecision && !selectiveDecision.writes_observation) return;
 
     const record = buildRecord({
       packetId,
@@ -529,37 +772,76 @@ probePaths.forEach((probe, probeIndex) => {
       path,
       nodeId,
       hopIndex,
+      effectiveHopMetadataBytes: selectiveDecision?.metadata_bytes ?? forwardingMetadataBytes,
+      effectiveLinkObservationMode,
       ingressLinkId,
       egressLinkId,
       observedLink,
       observationScope: "forwarding-hop",
       localPortPeer: "",
+      oamTargetRecord: forwardingTargetRecord,
+      oamTransitRecord: targetAware && !forwardingTargetRecord,
+      selectiveMetadataEnabled,
+      selectiveMetadataProfile: selectiveDecision?.profile ?? "",
+      nodeFieldsPresent: selectiveDecision?.node_fields_present ?? [],
+      linkFieldsPresent: selectiveDecision?.link_fields_present ?? [],
     });
     hopRecords.push(record);
     packetHopRecords.push(record);
 
     const scannedNodeKey = `${probe.slice_index}|${nodeId}`;
-    if (linkObservationMode === "all-adjacent" && !scannedNodeKeys.has(scannedNodeKey)) {
+    const adjacentLinks = linksBySliceAndEndpoint.get(scannedNodeKey) ?? [];
+    const targetNeighborhoodNode = targetAware && mandatoryTargets.nodes.has(nodeId);
+    const targetNeighborhoodLink = targetAware && adjacentLinks.some((link) => mandatoryTargets.links.has(link.link_id));
+    const scansAdjacent = effectiveLinkObservationMode === "all-adjacent" || targetNeighborhoodNode || targetNeighborhoodLink;
+    if (targetAware && effectiveLinkObservationMode === "target-neighborhood" && !scansAdjacent) {
+      targetAwareSuppressedAdjacentScans += adjacentLinks.length;
+    }
+    if (scansAdjacent && !scannedNodeKeys.has(scannedNodeKey)) {
       scannedNodeKeys.add(scannedNodeKey);
       const node = nodesBySliceAndId.get(`${probe.slice_index}|${nodeId}`) ?? {};
-      const adjacentLinks = linksBySliceAndEndpoint.get(scannedNodeKey) ?? [];
       adjacentLinks.forEach((adjacentLink, adjacentIndex) => {
+        const adjacentTargetRecord = targetAware && (
+          targetNeighborhoodNode || mandatoryTargets.links.has(adjacentLink.link_id)
+        );
+        if (targetAware && effectiveLinkObservationMode === "target-neighborhood" && !adjacentTargetRecord) {
+          targetAwareSuppressedAdjacentScans += 1;
+          return;
+        }
         if (!adjacentScanAllowed({ node, scannedNodeKey, adjacentIndex })) {
           suppressedAdjacentLinkScans += 1;
           return;
         }
         const peer = adjacentLink.source === nodeId ? adjacentLink.target : adjacentLink.source;
+        const selectiveAdjacentProfile = String(probe.selective_adjacent_link_profile ?? "");
+        const selectiveAdjacentLink = selectiveMetadataEnabled && ["link-light", "link-core"].includes(selectiveAdjacentProfile);
+        const selectiveAdjacentLinkBytes = selectiveAdjacentProfile === "link-core" ? 48 : 20;
+        const selectiveAdjacentLinkFields = selectiveAdjacentProfile === "link-core"
+          ? SELECTIVE_LINK_CORE_FIELDS
+          : SELECTIVE_LINK_LIGHT_FIELDS;
         const localRecord = buildRecord({
           packetId,
           probe,
           path,
           nodeId,
           hopIndex,
+          effectiveHopMetadataBytes: selectiveAdjacentLink
+            ? selectiveAdjacentLinkBytes
+            : targetAware
+              ? adjacentTargetRecord ? targetHopMetadataBytes : transitHopMetadataBytes
+              : effectiveHopMetadataBytes,
+          effectiveLinkObservationMode,
           ingressLinkId,
           egressLinkId,
           observedLink: adjacentLink,
           observationScope: "local-adjacent-link",
           localPortPeer: peer,
+          oamTargetRecord: adjacentTargetRecord,
+          oamTransitRecord: targetAware && !adjacentTargetRecord,
+          selectiveMetadataEnabled: selectiveAdjacentLink,
+          selectiveMetadataProfile: selectiveAdjacentLink ? `${selectiveAdjacentProfile}-adjacent` : "",
+          nodeFieldsPresent: [],
+          linkFieldsPresent: selectiveAdjacentLink ? selectiveAdjacentLinkFields : [],
         });
         hopRecords.push(localRecord);
         packetHopRecords.push(localRecord);
@@ -586,42 +868,166 @@ probePaths.forEach((probe, probeIndex) => {
     reporting_path: reporting.reporting_path ?? "",
     reporting_link_ids: reporting.reporting_link_ids ?? "",
     record_count: packetHopRecords.length,
-    report_size_bytes: reportHeaderBytes + packetHopRecords.length * hopMetadataBytes,
+    adaptive_metadata_profile: probe.adaptive_metadata_profile ?? "standard",
+    adaptive_link_observation_mode: effectiveLinkObservationMode,
+    hop_metadata_bytes: effectiveHopMetadataBytes,
+    metadata_compression_ratio: probe.metadata_compression_ratio ?? "",
+    selective_metadata_enabled: selectiveMetadataEnabled,
+    target_mask_bytes: targetMaskBytes,
+    report_size_bytes: reportHeaderBytes + packetHopRecords.reduce((total, record) => total + numberValue(record.hop_metadata_bytes, hopMetadataBytes), 0),
     status: reportingBlocked ? "dropped" : "generated",
     drop_reason: reportingBlocked ? "no-reporting-path" : "",
+    invalid_probe_link_id: "",
   });
 });
 
-const observedNodes = uniqueBy(hopRecords, (record) => `${record.slice_index}|${record.node_id}`);
+const nodeCountsBySlice = new Map(
+  [...groupBy(nodes, (node) => String(node.slice_index)).entries()].map(([sliceIndex, rows]) => [
+    Number(sliceIndex),
+    new Set(rows.map((row) => row.node_id)).size,
+  ]),
+);
+const plannedScaleBudgetBySlice = new Map();
+for (const probe of probePaths) {
+  if (String(probe.scale_budget_enabled ?? "").toLowerCase() !== "true") continue;
+  const sliceIndex = numberValue(probe.slice_index, NaN);
+  const plannedBudget = numberValue(probe.scale_budget_bytes, 0);
+  if (!Number.isFinite(sliceIndex) || plannedBudget <= 0) continue;
+  const current = plannedScaleBudgetBySlice.get(sliceIndex);
+  plannedScaleBudgetBySlice.set(
+    sliceIndex,
+    current === undefined ? Math.floor(plannedBudget) : Math.min(current, Math.floor(plannedBudget)),
+  );
+}
+const byteBudgetBySlice = telemetryByteBudgetPerSlice > 0
+  ? new Map([...nodeCountsBySlice.keys()].map((sliceIndex) => [sliceIndex, telemetryByteBudgetPerSlice]))
+  : telemetryByteBudgetPerNodeSlice > 0
+    ? new Map([...nodeCountsBySlice.entries()].map(([sliceIndex, nodeCount]) => [
+        sliceIndex,
+        Math.floor(nodeCount * telemetryByteBudgetPerNodeSlice),
+      ]))
+    : plannedScaleBudgetBySlice.size > 0
+      ? plannedScaleBudgetBySlice
+      : 0;
+const telemetryByteBudgetSource = telemetryByteBudgetPerSlice > 0
+  ? "explicit-per-slice"
+  : telemetryByteBudgetPerNodeSlice > 0
+    ? "explicit-per-node-slice"
+    : plannedScaleBudgetBySlice.size > 0
+      ? "scale-adaptive-path-plan"
+      : "disabled";
+const byteBudget = selectBudgetAdmittedProbeIds({
+  probes: probePaths,
+  hopRecords,
+  reports,
+  probePacketBaseBytes,
+  perSliceBudgetBytes: byteBudgetBySlice,
+});
+const executedProbePaths = byteBudget.enabled
+  ? probePaths.filter((probe) => byteBudget.admittedProbeIds.has(String(probe.probe_id ?? "")))
+  : probePaths;
+if (byteBudget.enabled) {
+  hopRecords = hopRecords.filter((record) => byteBudget.admittedProbeIds.has(String(record.probe_id ?? "")));
+  reports = reports.filter((report) => byteBudget.admittedProbeIds.has(String(report.probe_id ?? "")));
+  forwardingEvents = forwardingEvents.filter((event) => byteBudget.admittedProbeIds.has(String(event.probe_id ?? "")));
+}
+const byteBudgetRows = [...nodeCountsBySlice.entries()]
+  .sort(([left], [right]) => left - right)
+  .map(([sliceIndex, nodeCount]) => {
+    const observed = byteBudget.bySlice.find((row) => row.slice_index === sliceIndex);
+    const budgetBytes = byteBudget.enabled ? numberValue(byteBudgetBySlice.get(sliceIndex)) : 0;
+    return observed ?? {
+      slice_index: sliceIndex,
+      node_count: nodeCount,
+      budget_bytes: budgetBytes,
+      actual_bytes: 0,
+      admitted_probes: 0,
+      rejected_probes: 0,
+      budget_utilization: 0,
+      budget_headroom_bytes: budgetBytes,
+      cap_violation: false,
+    };
+  })
+  .map((row) => ({ ...row, node_count: nodeCountsBySlice.get(row.slice_index) ?? 0 }));
+
+let telemetryByteBudgetPaddingBytes = 0;
+if (byteBudget.enabled && telemetryByteBudgetPadToCap) {
+  for (const budgetRow of byteBudgetRows) {
+    const headroom = Math.max(0, numberValue(budgetRow.budget_bytes) - numberValue(budgetRow.actual_bytes));
+    if (headroom <= 0 || numberValue(budgetRow.admitted_probes) <= 0) {
+      budgetRow.budget_padding_bytes = 0;
+      continue;
+    }
+    let reportIndex = -1;
+    for (let index = reports.length - 1; index >= 0; index -= 1) {
+      const report = reports[index];
+      if (numberValue(report.slice_index) !== numberValue(budgetRow.slice_index)) continue;
+      if (String(report.status ?? "generated").toLowerCase() !== "generated") continue;
+      if (numberValue(report.report_size_bytes) <= 0) continue;
+      reportIndex = index;
+      break;
+    }
+    if (reportIndex < 0) {
+      budgetRow.budget_padding_bytes = 0;
+      continue;
+    }
+    reports[reportIndex] = {
+      ...reports[reportIndex],
+      report_size_bytes: numberValue(reports[reportIndex].report_size_bytes) + headroom,
+      budget_padding_bytes: numberValue(reports[reportIndex].budget_padding_bytes) + headroom,
+    };
+    budgetRow.actual_bytes = numberValue(budgetRow.actual_bytes) + headroom;
+    budgetRow.budget_padding_bytes = headroom;
+    budgetRow.budget_headroom_bytes = 0;
+    budgetRow.budget_utilization = budgetRow.actual_bytes / Math.max(numberValue(budgetRow.budget_bytes), 1);
+    telemetryByteBudgetPaddingBytes += headroom;
+  }
+}
+
+const reportingInterruption = applyControlledReportingInterruptions(reports, {
+  rate: reportingInterruptionRate,
+  seed: reportingInterruptionSeed,
+});
+reports = reportingInterruption.reports;
+
+const observedNodes = uniqueBy(
+  hopRecords.filter((record) => !boolValue(record.selective_metadata_enabled) || String(record.node_fields_present ?? "").length > 0),
+  (record) => `${record.slice_index}|${record.node_id}`,
+);
 const observedLinks = uniqueBy(hopRecords.filter((record) => record.observed_link_id), (record) => `${record.slice_index}|${record.observed_link_id}`);
 const activeTruthLinks = links.filter((link) => boolValue(link.is_active));
 const activeTruthLinkKeys = new Set(activeTruthLinks.map((link) => `${link.slice_index}|${link.link_id}`));
 const observedActiveLinks = observedLinks.filter((record) => activeTruthLinkKeys.has(`${record.slice_index}|${record.observed_link_id}`));
-const pathNodeCounts = probePaths.map((probe) => numberValue(probe.path_node_count, splitPath(probe.path).length));
+const pathNodeCounts = executedProbePaths.map((probe) => numberValue(probe.path_node_count, splitPath(probe.path).length));
 const totalReportBytes = reports.reduce((total, report) => total + numberValue(report.report_size_bytes), 0);
-const totalMetadataBytes = hopRecords.length * hopMetadataBytes;
-const totalProbePacketBaseBytes = probePaths.length * probePacketBaseBytes;
-const totalTelemetryGeneratedBytes = totalMetadataBytes + totalReportBytes + totalProbePacketBaseBytes;
+const totalMetadataBytes = hopRecords.reduce((total, record) => total + numberValue(record.hop_metadata_bytes, hopMetadataBytes), 0);
+const totalProbePacketBaseBytes = executedProbePaths.length * probePacketBaseBytes;
+const totalTargetMaskBytes = executedProbePaths.reduce((total, probe) => total + Math.max(0, numberValue(probe.target_mask_bytes)), 0);
+const totalTelemetryGeneratedBytes = totalMetadataBytes + totalReportBytes + totalProbePacketBaseBytes + totalTargetMaskBytes;
 const telemetryTxEnergyJ = totalTelemetryGeneratedBytes * telemetryTxNjPerByte * 1e-9;
-const telemetryProcessingEnergyJ = hopRecords.length * hopProcessingJ + reports.length * reportProcessingJ;
+const forwardOnlyHopCount = forwardingEvents.filter((event) => !event.writes_observation).length;
+const telemetryProcessingEnergyJ = hopRecords.length * hopProcessingJ + forwardOnlyHopCount * forwardOnlyProcessingJ + reports.length * reportProcessingJ;
 const allSlices = [...new Set(nodes.map((node) => String(node.slice_index)))];
 const probeCountsBySlice = new Map(
-  [...groupBy(probePaths, (probe) => String(probe.slice_index)).entries()].map(([sliceIndex, rows]) => [sliceIndex, rows.length]),
+  [...groupBy(executedProbePaths, (probe) => String(probe.slice_index)).entries()].map(([sliceIndex, rows]) => [sliceIndex, rows.length]),
 );
 const overheadBySlice = buildOverheadBySlice({
   allSlices,
   hopRecords,
   reports,
+  probePaths: executedProbePaths,
+  forwardingEvents,
   hopMetadataBytes,
   probePacketBaseBytes,
   probeCountsBySlice,
   reportHeaderBytes,
   hopProcessingJ,
+  forwardOnlyProcessingJ,
   reportProcessingJ,
   telemetryTxNjPerByte,
 });
 const linkOverhead = buildLinkOverhead({
-  probePaths,
+  probePaths: executedProbePaths,
   reports,
   reportingByProbeId,
   probePacketBaseBytes,
@@ -631,13 +1037,15 @@ const nodeOverhead = buildNodeOverhead({
   nodes,
   hopRecords,
   reports,
-  probePaths,
+  probePaths: executedProbePaths,
   reportingByProbeId,
   hopMetadataBytes,
   probePacketBaseBytes,
   hopProcessingJ,
   reportProcessingJ,
   telemetryTxNjPerByte,
+  forwardingEvents,
+  forwardOnlyProcessingJ,
 });
 
 const coverageReport = {
@@ -665,10 +1073,37 @@ const coverageReport = {
     low_energy_adjacent_scan_ratio: lowEnergyAdjacentScanRatio,
     low_energy_scan_limited_nodes: lowEnergyScanLimitedNodes,
     suppressed_adjacent_link_scans: suppressedAdjacentLinkScans,
-    probe_paths: probePaths.length,
+    planned_probe_paths: probePaths.length,
+    probe_paths: executedProbePaths.length,
+    telemetry_byte_budget_enabled: byteBudget.enabled,
+    telemetry_byte_budget_source: telemetryByteBudgetSource,
+    scale_adaptive_path_plan_budget_slices: plannedScaleBudgetBySlice.size,
+    telemetry_byte_budget_per_slice: telemetryByteBudgetPerSlice,
+    telemetry_byte_budget_per_node_slice: telemetryByteBudgetPerNodeSlice,
+    telemetry_byte_budget_pad_to_cap: telemetryByteBudgetPadToCap,
+    telemetry_byte_budget_padding_bytes: telemetryByteBudgetPaddingBytes,
+    telemetry_byte_budget_rejected_probe_paths: byteBudget.rejectedProbeIds.size,
+    telemetry_byte_budget_cap_violations: byteBudget.capViolations,
+    telemetry_byte_budget_actual_total_bytes: byteBudgetRows.reduce((total, row) => total + numberValue(row.actual_bytes), 0),
+    telemetry_byte_budget_total_cap_bytes: byteBudgetRows.reduce((total, row) => total + numberValue(row.budget_bytes), 0),
+    telemetry_byte_budget_by_slice: byteBudgetRows,
+    path_only_probe_paths: executedProbePaths.filter((probe) => (probe.adaptive_link_observation_mode || linkObservationMode) === "path-only").length,
+    all_adjacent_probe_paths: executedProbePaths.filter((probe) => (probe.adaptive_link_observation_mode || linkObservationMode) === "all-adjacent").length,
+    target_aware_probe_paths: executedProbePaths.filter((probe) => probe.adaptive_metadata_profile === "oam-target-aware").length,
+    target_neighborhood_probe_paths: executedProbePaths.filter((probe) => (probe.adaptive_link_observation_mode || linkObservationMode) === "target-neighborhood").length,
+    target_aware_suppressed_adjacent_scans: targetAwareSuppressedAdjacentScans,
     reporting_paths_available: reportingPaths.length,
     planned_reporting_paths: reports.filter((report) => report.reporting_status === "planned").length,
     blocked_reporting_paths: reports.filter((report) => report.reporting_status === "blocked").length,
+    controlled_reporting_interruption_rate: reportingInterruption.summary.requested_rate,
+    controlled_reporting_interruption_seed: reportingInterruption.summary.seed,
+    controlled_reporting_interruption_eligible_reports: reportingInterruption.summary.eligible_reports,
+    controlled_reporting_interruptions: reportingInterruption.summary.interrupted_reports,
+    controlled_reporting_interruption_achieved_rate: round(reportingInterruption.summary.achieved_rate),
+    invalid_probe_policy: invalidProbePolicy,
+    planned_invalid_probe_paths: invalidProbePaths,
+    invalid_probe_paths: reports.filter((report) => report.reporting_status === "probe-path-failed").length,
+    invalid_probe_path_ratio: round(reports.filter((report) => report.reporting_status === "probe-path-failed").length / Math.max(executedProbePaths.length, 1)),
   },
   coverage: {
     total_node_samples: nodes.length,
@@ -687,18 +1122,35 @@ const coverageReport = {
   overhead: {
     hop_records: hopRecords.length,
     hop_metadata_bytes: hopMetadataBytes,
+    compact_metadata_hop_records: hopRecords.filter((record) => numberValue(record.hop_metadata_bytes, hopMetadataBytes) < hopMetadataBytes).length,
+    target_metadata_hop_records: hopRecords.filter((record) => record.oam_target_record === true).length,
+    transit_metadata_hop_records: hopRecords.filter((record) => record.oam_transit_record === true).length,
+    target_neighborhood_adjacent_records: hopRecords.filter((record) =>
+      record.adaptive_link_observation_mode === "target-neighborhood" && record.observation_scope === "local-adjacent-link"
+    ).length,
+    mean_effective_hop_metadata_bytes: round(mean(hopRecords.map((record) => numberValue(record.hop_metadata_bytes, hopMetadataBytes)))),
+    metadata_bytes_saved_by_profile: round(hopRecords.reduce((total, record) =>
+      total + Math.max(0, hopMetadataBytes - numberValue(record.hop_metadata_bytes, hopMetadataBytes)), 0)),
+    target_aware_metadata_bytes_saved: round(hopRecords
+      .filter((record) => record.adaptive_metadata_profile === "oam-target-aware")
+      .reduce((total, record) => total + Math.max(0, hopMetadataBytes - numberValue(record.hop_metadata_bytes, hopMetadataBytes)), 0)),
     total_metadata_bytes: totalMetadataBytes,
+    metadata_writing_hops: hopRecords.length,
+    forward_only_hops: forwardingEvents.filter((event) => !event.writes_observation).length,
+    forwarding_hops: forwardingEvents.length,
+    total_target_mask_bytes: totalTargetMaskBytes,
     probe_packet_base_bytes: probePacketBaseBytes,
     total_probe_packet_base_bytes: totalProbePacketBaseBytes,
     reports: reports.length,
     report_header_bytes: reportHeaderBytes,
     total_report_bytes: totalReportBytes,
-    total_int_bytes: totalMetadataBytes + totalReportBytes,
+    total_int_bytes: totalMetadataBytes + totalReportBytes + totalTargetMaskBytes,
     total_telemetry_generated_bytes: totalTelemetryGeneratedBytes,
     link_overhead_rows: linkOverhead.length,
     node_overhead_rows: nodeOverhead.length,
     telemetry_energy_model: "hop_processing_plus_report_processing_plus_tx_bytes",
     hop_processing_j: hopProcessingJ,
+    forward_only_processing_j: forwardOnlyProcessingJ,
     report_processing_j: reportProcessingJ,
     telemetry_tx_nj_per_byte: telemetryTxNjPerByte,
     processing_energy_j: round(telemetryProcessingEnergyJ),
@@ -715,6 +1167,8 @@ await Promise.all([
   writeFile(join(outputDir, `probe-int-overhead-by-slice-${algorithm}.csv`), rowsToCsv(overheadBySlice), "utf8"),
   writeFile(join(outputDir, `probe-int-link-overhead-${algorithm}.csv`), rowsToCsv(linkOverhead), "utf8"),
   writeFile(join(outputDir, `probe-int-node-overhead-${algorithm}.csv`), rowsToCsv(nodeOverhead), "utf8"),
+  writeFile(join(outputDir, `probe-int-byte-budget-${algorithm}.csv`), rowsToCsv(byteBudget.decisions), "utf8"),
+  writeFile(join(outputDir, `probe-int-admitted-paths-${algorithm}.csv`), rowsToCsv(executedProbePaths), "utf8"),
   writeFile(join(outputDir, `probe-int-run-report-${algorithm}.json`), JSON.stringify(coverageReport, null, 2), "utf8"),
 ]);
 
@@ -723,7 +1177,9 @@ console.log(JSON.stringify({
   outputDir,
   mode: "probe-int",
   algorithm,
-  probePaths: probePaths.length,
+  plannedProbePaths: probePaths.length,
+  probePaths: executedProbePaths.length,
+  budgetRejectedProbePaths: byteBudget.rejectedProbeIds.size,
   hopRecords: hopRecords.length,
   reports: reports.length,
   observedNodeSamples: observedNodes.length,

@@ -21,8 +21,8 @@
 
 ## 产物
 
-- 可视化报告：E:\INT-Temerity\reports\experiment11-dynamic-equal-budget-ablation\experiment11-dynamic-ablation-report.html
-- 逐种子结果：E:\INT-Temerity\reports\experiment11-dynamic-equal-budget-ablation\experiment11-ablation-by-seed.csv
-- 机制贡献：E:\INT-Temerity\reports\experiment11-dynamic-equal-budget-ablation\experiment11-mechanism-contributions.csv
-- 动态性交互：E:\INT-Temerity\reports\experiment11-dynamic-equal-budget-ablation\experiment11-dynamicity-interactions.csv
-- 公平性审计：E:\INT-Temerity\reports\experiment11-dynamic-equal-budget-ablation\experiment11-budget-fairness.csv
+- 可视化报告：E:\INT-Telemetry\reports\experiment11-dynamic-equal-budget-ablation\experiment11-dynamic-ablation-report.html
+- 逐种子结果：E:\INT-Telemetry\reports\experiment11-dynamic-equal-budget-ablation\experiment11-ablation-by-seed.csv
+- 机制贡献：E:\INT-Telemetry\reports\experiment11-dynamic-equal-budget-ablation\experiment11-mechanism-contributions.csv
+- 动态性交互：E:\INT-Telemetry\reports\experiment11-dynamic-equal-budget-ablation\experiment11-dynamicity-interactions.csv
+- 公平性审计：E:\INT-Telemetry\reports\experiment11-dynamic-equal-budget-ablation\experiment11-budget-fairness.csv

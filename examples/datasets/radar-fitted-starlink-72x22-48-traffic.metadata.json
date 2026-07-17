@@ -1,9 +1,9 @@
 {
-  "schema": "int-temerity-radar-calibrated-traffic-metadata/v1",
+  "schema": "int-telemetry-radar-calibrated-traffic-metadata/v1",
   "generated_at": "2026-07-03T13:10:19.574Z",
   "generator": "scripts/generateRadarCalibratedTraffic.mjs",
   "snapshot": {
-    "path": "E:\\INT-Temerity\\data\\tle-snapshots\\celestrak-starlink-real-walker-72x22.json",
+    "path": "E:\\INT-Telemetry\\data\\tle-snapshots\\celestrak-starlink-real-walker-72x22.json",
     "source": "celestrak",
     "group": "STARLINK",
     "fingerprint": "eb0f9db4",
@@ -12,7 +12,7 @@
     "satellites_per_plane": 22
   },
   "calibration_profile": {
-    "path": "E:\\INT-Temerity\\traffic-calibration\\cloudflare-radar-profile.json",
+    "path": "E:\\INT-Telemetry\\traffic-calibration\\cloudflare-radar-profile.json",
     "profile_id": "cloudflare-radar-inspired-global-48-v1",
     "data_mode": "external-cloudflare-radar-timeseries-driven",
     "original_data_mode": "public-statistical-calibration-template",
@@ -106,7 +106,7 @@
   },
   "radar_calibration": {
     "enabled": true,
-    "source_path": "E:\\INT-Temerity\\reports\\experiment1-external-realism-72x22\\external\\cloudflare-radar\\radar-as14593-traffic.json",
+    "source_path": "E:\\INT-Telemetry\\reports\\experiment1-external-realism-72x22\\external\\cloudflare-radar\\radar-as14593-traffic.json",
     "extracted_path": "result.serie_0",
     "original_points": 168,
     "selected_points": 48,
@@ -458,8 +458,8 @@
     ]
   },
   "output": {
-    "csv": "E:\\INT-Temerity\\examples\\datasets\\radar-fitted-starlink-72x22-48-traffic.csv",
-    "metadata": "E:\\INT-Temerity\\examples\\datasets\\radar-fitted-starlink-72x22-48-traffic.metadata.json",
+    "csv": "E:\\INT-Telemetry\\examples\\datasets\\radar-fitted-starlink-72x22-48-traffic.csv",
+    "metadata": "E:\\INT-Telemetry\\examples\\datasets\\radar-fitted-starlink-72x22-48-traffic.metadata.json",
     "slices": 48,
     "rows": 1086,
     "routed_tasks": 1014,

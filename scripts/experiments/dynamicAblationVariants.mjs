@@ -13,6 +13,7 @@ const FULL_MECHANISMS = Object.freeze({
   adaptiveReuse: true,
   incrementalTopologyRepair: true,
   forecastRiskScoring: true,
+  topologyVersionedObjective: true,
   adaptiveProbeBudget: false,
   metricTensorCoupling: true,
   nodeStateCoupling: true,
@@ -37,7 +38,7 @@ const VARIANT_DEFINITIONS = Object.freeze([
   {
     id: "without-topology-adaptation",
     label: "移除拓扑自适应",
-    disabledMechanisms: ["adaptiveReuse", "incrementalTopologyRepair"],
+    disabledMechanisms: ["adaptiveReuse", "incrementalTopologyRepair", "topologyVersionedObjective"],
   },
   {
     id: "without-forecast-orbit-priors",

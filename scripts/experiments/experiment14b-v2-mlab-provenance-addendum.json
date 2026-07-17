@@ -1,0 +1,36 @@
+{
+  "schema": "int-telemetry-experiment14b-v2-mlab-provenance-addendum/v1",
+  "status": "pre-registered-before-gp0-and-future-mlab-results",
+  "official_table": "measurement-lab.ndt.unified_downloads",
+  "minimum_rows": 20,
+  "required_metadata_fields": [
+    "official_table",
+    "query_sha256",
+    "bigquery_job_id",
+    "query_started_at",
+    "query_completed_at",
+    "exported_at",
+    "row_count",
+    "source_csv_sha256",
+    "source_url",
+    "license",
+    "test_values_used_for_fit",
+    "post_test_parameter_updates"
+  ],
+  "timing_gate": "query_completed_at must be at or after gp0.windows.mlab_import_not_before",
+  "content_gates": {
+    "require_exact_query_hash": true,
+    "require_exact_raw_csv_hash": true,
+    "require_exact_row_count": true,
+    "require_all_rows_inside_frozen_topology_window": true,
+    "require_asn_14593": true,
+    "require_ndt7": true,
+    "require_direct_client_and_server_coordinates": true,
+    "require_server_identity": true
+  },
+  "causality_gates": {
+    "test_values_used_for_fit": 0,
+    "post_test_parameter_updates": 0
+  },
+  "overwrite_allowed": false
+}

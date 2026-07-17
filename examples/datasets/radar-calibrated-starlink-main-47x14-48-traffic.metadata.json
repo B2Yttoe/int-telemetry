@@ -1,9 +1,9 @@
 {
-  "schema": "int-temerity-radar-calibrated-traffic-metadata/v1",
+  "schema": "int-telemetry-radar-calibrated-traffic-metadata/v1",
   "generated_at": "2026-07-02T08:18:07.119Z",
   "generator": "scripts/generateRadarCalibratedTraffic.mjs",
   "snapshot": {
-    "path": "E:\\INT-Temerity\\data\\tle-snapshots\\celestrak-starlink-main-550km-53deg-walker-47x14.json",
+    "path": "E:\\INT-Telemetry\\data\\tle-snapshots\\celestrak-starlink-main-550km-53deg-walker-47x14.json",
     "source": "celestrak",
     "group": "STARLINK",
     "fingerprint": "ee699b79",
@@ -12,7 +12,7 @@
     "satellites_per_plane": 14
   },
   "calibration_profile": {
-    "path": "E:\\INT-Temerity\\traffic-calibration\\cloudflare-radar-profile.json",
+    "path": "E:\\INT-Telemetry\\traffic-calibration\\cloudflare-radar-profile.json",
     "profile_id": "cloudflare-radar-inspired-global-48-v1",
     "data_mode": "public-statistical-calibration-template",
     "not_raw_cloudflare_export": true,
@@ -103,8 +103,8 @@
     ]
   },
   "output": {
-    "csv": "E:\\INT-Temerity\\examples\\datasets\\radar-calibrated-starlink-main-47x14-48-traffic.csv",
-    "metadata": "E:\\INT-Temerity\\examples\\datasets\\radar-calibrated-starlink-main-47x14-48-traffic.metadata.json",
+    "csv": "E:\\INT-Telemetry\\examples\\datasets\\radar-calibrated-starlink-main-47x14-48-traffic.csv",
+    "metadata": "E:\\INT-Telemetry\\examples\\datasets\\radar-calibrated-starlink-main-47x14-48-traffic.metadata.json",
     "slices": 48,
     "rows": 1097,
     "routed_tasks": 1025,

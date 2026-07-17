@@ -1,0 +1,26 @@
+{
+  "schema": "int-telemetry-experiment14b-strict-pairing-addendum/v1",
+  "status": "pre-registered-before-strict-future-user-performance-import",
+  "purpose": "Require time, client geography, and measurement-server identity/location to match the frozen topology before an external user-performance sample can count as strict evidence.",
+  "minimum_pairs": {
+    "mlab_ndt7": 20,
+    "ripe_atlas_exact_anchor": 20
+  },
+  "maximum_topology_time_offset_seconds": 150,
+  "required": {
+    "modeled_status": "modeled",
+    "temporal_pairing": "exact-topology-window",
+    "client_location_source": "direct-measurement-coordinate",
+    "server_location_source": "direct-measurement-target-coordinate",
+    "server_identity_present": true,
+    "test_targets_used_for_fit": 0,
+    "post_test_parameter_updates": 0
+  },
+  "non_sufficient": [
+    "representative-periodic-phase",
+    "training-client-city-centroid",
+    "training-client-country-centroid",
+    "training-global-centroid",
+    "K-root-anycast-public-fallback"
+  ]
+}

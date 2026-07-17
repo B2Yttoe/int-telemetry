@@ -1,0 +1,39 @@
+{
+  "schema": "int-telemetry-experiment14b-v2-mlab-bigquery-collector-addendum/v1",
+  "status": "pre-registered-before-gp0-and-future-mlab-results",
+  "official_api": "https://bigquery.googleapis.com/bigquery/v2/projects/{projectId}/queries",
+  "official_table": "measurement-lab.ndt.unified_downloads",
+  "maximum_bytes_billed": "200000000000",
+  "page_size": 10000,
+  "poll_timeout_ms": 10000,
+  "maximum_poll_attempts": 180,
+  "accepted_authentication": [
+    "GOOGLE_OAUTH_ACCESS_TOKEN",
+    "GOOGLE_APPLICATION_CREDENTIALS service-account JSON"
+  ],
+  "required_environment": [
+    "GOOGLE_CLOUD_PROJECT or service-account project_id"
+  ],
+  "timing_gate": "Collection cannot start before gp0.windows.mlab_import_not_before.",
+  "causality_gates": {
+    "require_query_correction_lock": true,
+    "test_values_used_for_fit": 0,
+    "post_test_parameter_updates": 0,
+    "synthetic_fallback_allowed": false,
+    "overwrite_allowed": false
+  },
+  "official_evidence": [
+    {
+      "url": "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/query",
+      "claim": "jobs.query runs GoogleSQL and returns a job reference, schema, rows, byte statistics, and pagination token."
+    },
+    {
+      "url": "https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/getQueryResults",
+      "claim": "jobs.getQueryResults polls incomplete jobs and retrieves subsequent result pages."
+    },
+    {
+      "url": "https://www.measurementlab.net/tests/ndt/views/migrate/",
+      "claim": "The unified download view exposes a.MeanThroughputMbps, a.MinRTT, and node._Instruments."
+    }
+  ]
+}

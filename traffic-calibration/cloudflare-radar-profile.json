@@ -1,5 +1,5 @@
 {
-  "schema": "int-temerity-traffic-calibration-profile/v1",
+  "schema": "int-telemetry-traffic-calibration-profile/v1",
   "profile_id": "cloudflare-radar-inspired-global-48-v1",
   "data_mode": "public-statistical-calibration-template",
   "not_raw_cloudflare_export": true,

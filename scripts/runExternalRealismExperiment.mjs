@@ -1526,7 +1526,7 @@ const outputs = {
 };
 
 const report = {
-  schema: "int-temerity-experiment1-external-realism/v1",
+  schema: "int-telemetry-experiment1-external-realism/v1",
   generated_at: new Date().toISOString(),
   purpose:
     "Validate first-stage satellite-network simulation outputs against external public observations rather than relying on internal consistency checks.",

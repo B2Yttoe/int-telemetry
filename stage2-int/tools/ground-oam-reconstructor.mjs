@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 
@@ -126,8 +126,16 @@ function unique(values) {
   return [...new Set(values.filter((value) => value !== undefined && value !== ""))];
 }
 
+function finiteFieldValues(rows, field) {
+  return rows
+    .map((row) => row[field])
+    .filter((value) => value !== undefined && value !== null && String(value).trim() !== "")
+    .map(Number)
+    .filter(Number.isFinite);
+}
+
 function meanField(rows, field) {
-  const values = rows.map((row) => numberValue(row[field], NaN)).filter(Number.isFinite);
+  const values = finiteFieldValues(rows, field);
   return values.length ? round(mean(values)) : "";
 }
 
@@ -139,7 +147,7 @@ function disagreementRatio(rows, field) {
 
 function numericSpreadRatio(rows, fieldScales) {
   const spreads = Object.entries(fieldScales).map(([field, scale]) => {
-    const values = rows.map((row) => numberValue(row[field], NaN)).filter(Number.isFinite);
+    const values = finiteFieldValues(rows, field);
     if (values.length <= 1) return 0;
     return clamp((Math.max(...values) - Math.min(...values)) / Math.max(scale, 1e-6), 0, 1);
   });
@@ -299,6 +307,39 @@ function selectPriorRows({ rows, sliceIndex, group, groupFn }) {
   return { rows: usable, scope: usable.length > 0 ? "historical-all-groups" : "none" };
 }
 
+function pushMapList(map, key, row) {
+  if (!map.has(key)) map.set(key, []);
+  map.get(key).push(row);
+}
+
+function buildPriorIndex(rows, groupFn) {
+  const usable = [];
+  const sameSlice = new Map();
+  const sameSliceGroup = new Map();
+  const globalGroup = new Map();
+  rows.forEach((row) => {
+    if (row.observation_source !== "observed" && row.observation_source !== "stale-carryover") return;
+    const slice = String(row.slice_index);
+    const group = groupFn(row);
+    usable.push(row);
+    pushMapList(sameSlice, slice, row);
+    pushMapList(sameSliceGroup, `${slice}|${group}`, row);
+    pushMapList(globalGroup, group, row);
+  });
+  return { usable, sameSlice, sameSliceGroup, globalGroup };
+}
+
+function selectPriorRowsFromIndex({ index, sliceIndex, group }) {
+  const slice = String(sliceIndex);
+  const sameSliceGroup = index.sameSliceGroup.get(`${slice}|${group}`) ?? [];
+  if (sameSliceGroup.length > 0) return { rows: sameSliceGroup, scope: "same-slice-spatial-group" };
+  const sameSlice = index.sameSlice.get(slice) ?? [];
+  if (sameSlice.length > 0) return { rows: sameSlice, scope: "same-slice-all-groups" };
+  const globalGroup = index.globalGroup.get(group) ?? [];
+  if (globalGroup.length > 0) return { rows: globalGroup, scope: "historical-spatial-group" };
+  return { rows: index.usable, scope: index.usable.length > 0 ? "historical-all-groups" : "none" };
+}
+
 async function readCsv(path) {
   return parseCsv(await readFile(path, "utf8"));
 }
@@ -383,8 +424,14 @@ function splitTransmittableReports(reports) {
   return { transmittable, preDropped };
 }
 
+function hasDeclaredObservationFields(record, fieldName) {
+  if (!boolValue(record.selective_metadata_enabled)) return true;
+  return String(record[fieldName] ?? "").trim().length > 0;
+}
+
 function reconstructNodes(deliveredHopRecords, truthNodes, options) {
-  const observed = aggregateHopRecords(deliveredHopRecords, (record) => `${record.slice_index}|${record.node_id}`, "node");
+  const nodeObservationRecords = deliveredHopRecords.filter((record) => hasDeclaredObservationFields(record, "node_fields_present"));
+  const observed = aggregateHopRecords(nodeObservationRecords, (record) => `${record.slice_index}|${record.node_id}`, "node");
   const observedMap = indexBy(observed, (record) => `${record.slice_index}|${record.node_id}`);
   const historyByNode = groupBy(observed, (record) => record.node_id);
   return truthNodes.map((truth) => {
@@ -484,7 +531,9 @@ function reconstructNodes(deliveredHopRecords, truthNodes, options) {
 }
 
 function reconstructLinks(deliveredHopRecords, truthLinks, options) {
-  const observedRecords = deliveredHopRecords.filter((record) => record.observed_link_id);
+  const observedRecords = deliveredHopRecords.filter(
+    (record) => record.observed_link_id && hasDeclaredObservationFields(record, "link_fields_present"),
+  );
   const observed = aggregateHopRecords(observedRecords, (record) => `${record.slice_index}|${record.observed_link_id}`, "link");
   const observedMap = indexBy(observed, (record) => `${record.slice_index}|${record.observed_link_id}`);
   const historyByLink = groupBy(observed, (record) => record.observed_link_id);
@@ -604,17 +653,18 @@ function applyOamPriorEstimates({ reconstructedNodes, reconstructedLinks, truthL
   const linkCatalog = indexBy(truthLinks, (link) => link.link_id);
   const nodeGroupFn = (node) => nodePriorGroup(node);
   const linkGroupFn = (link) => linkPriorGroup(linkCatalog.get(link.link_id) ?? {});
+  const nodePriorIndex = buildPriorIndex(reconstructedNodes, nodeGroupFn);
+  const linkPriorIndex = buildPriorIndex(reconstructedLinks, linkGroupFn);
   let nodePriorEstimates = 0;
   let linkPriorEstimates = 0;
 
   const nodes = reconstructedNodes.map((node) => {
     if (node.observation_source !== "unknown") return node;
     const group = nodePriorGroup(node);
-    const prior = selectPriorRows({
-      rows: reconstructedNodes,
+    const prior = selectPriorRowsFromIndex({
+      index: nodePriorIndex,
       sliceIndex: node.slice_index,
       group,
-      groupFn: nodeGroupFn,
     });
     if (prior.rows.length === 0) return node;
     const confidence = confidenceFromPriorRows(prior.rows, options);
@@ -652,11 +702,10 @@ function applyOamPriorEstimates({ reconstructedNodes, reconstructedLinks, truthL
   const links = reconstructedLinks.map((link) => {
     if (link.observation_source !== "unknown") return link;
     const group = linkGroupFn(link);
-    const prior = selectPriorRows({
-      rows: reconstructedLinks,
+    const prior = selectPriorRowsFromIndex({
+      index: linkPriorIndex,
       sliceIndex: link.slice_index,
       group,
-      groupFn: linkGroupFn,
     });
     if (prior.rows.length === 0) return link;
     const confidence = confidenceFromPriorRows(prior.rows, options);
@@ -955,6 +1004,7 @@ function buildPriorityRetests({ reconstructedNodes, reconstructedLinks, maxPerSl
     };
   });
 
+  const perSliceCounts = new Map();
   return [...nodeItems, ...linkItems]
     .filter((item) => item.priority_score > 0.2)
     .sort((left, right) =>
@@ -962,9 +1012,12 @@ function buildPriorityRetests({ reconstructedNodes, reconstructedLinks, maxPerSl
       numberValue(right.priority_score) - numberValue(left.priority_score) ||
       left.target_id.localeCompare(right.target_id),
     )
-    .filter((item, index, rows) => {
-      const sameSliceBefore = rows.slice(0, index).filter((old) => String(old.slice_index) === String(item.slice_index)).length;
-      return sameSliceBefore < maxPerSlice;
+    .filter((item) => {
+      const slice = String(item.slice_index);
+      const count = perSliceCounts.get(slice) ?? 0;
+      if (count >= maxPerSlice) return false;
+      perSliceCounts.set(slice, count + 1);
+      return true;
     });
 }
 
@@ -1347,6 +1400,7 @@ const minPriorConfidence = numberValue(argValue(args, "--min-prior-confidence", 
 const maxPriorConfidence = numberValue(argValue(args, "--max-prior-confidence", "0.35"), 0.35);
 const maxRetestsPerSlice = numberValue(argValue(args, "--max-retests-per-slice", "12"), 12);
 const baseTelemetryByteBudgetPerSlice = numberValue(argValue(args, "--base-telemetry-byte-budget-per-slice", "24000"), 24000);
+const writeEstimateGraph = argValue(args, "--write-estimate-graph", "true").toLowerCase() !== "false";
 
 requireFile(nodesPath, "nodes.csv");
 requireFile(linksPath, "links.csv");
@@ -1395,16 +1449,19 @@ const controlActions = buildControlActions({
   baseTelemetryByteBudgetPerSlice,
   baseDownlinkBudgetBytes: budgetBytes,
 });
-const estimateGraph = buildOamEstimateGraph({
-  reconstructedNodes,
-  reconstructedLinks,
-  truthLinks,
-  delivered,
-  undelivered,
-  priorityRetests,
-  controlActions,
-  oamOptions,
-});
+const estimateGraph = writeEstimateGraph
+  ? buildOamEstimateGraph({
+      reconstructedNodes,
+      reconstructedLinks,
+      truthLinks,
+      delivered,
+      undelivered,
+      priorityRetests,
+      controlActions,
+      oamOptions,
+    })
+  : null;
+const estimateGraphPath = join(outputDir, "ground-oam-estimate-graph.json");
 
 const reportMetrics = {
   schema_version: "stage2-ground-oam-evaluation-v1",
@@ -1476,12 +1533,14 @@ const reportMetrics = {
     boundary: "uses delivered INT reports, stale carry-over and OAM prior estimates; no stage-one truth for runtime actions",
   },
   outputs: {
-    estimate_graph_json: join(outputDir, "ground-oam-estimate-graph.json"),
+    estimate_graph_json: writeEstimateGraph ? estimateGraphPath : "",
+    estimate_graph_written: writeEstimateGraph,
     control_actions_csv: join(outputDir, "ground-oam-control-actions.csv"),
   },
 };
 
 await mkdir(outputDir, { recursive: true });
+if (!writeEstimateGraph) await rm(estimateGraphPath, { force: true });
 await Promise.all([
   writeFile(join(outputDir, "ground-delivered-reports.csv"), rowsToCsv(delivered), "utf8"),
   writeFile(join(outputDir, "ground-undelivered-reports.csv"), rowsToCsv(undelivered), "utf8"),
@@ -1489,7 +1548,7 @@ await Promise.all([
   writeFile(join(outputDir, "ground-reconstructed-links.csv"), rowsToCsv(reconstructedLinks), "utf8"),
   writeFile(join(outputDir, "ground-oam-priority-retest.csv"), rowsToCsv(priorityRetests), "utf8"),
   writeFile(join(outputDir, "ground-oam-control-actions.csv"), rowsToCsv(controlActions), "utf8"),
-  writeFile(join(outputDir, "ground-oam-estimate-graph.json"), JSON.stringify(estimateGraph, null, 2), "utf8"),
+  ...(writeEstimateGraph ? [writeFile(estimateGraphPath, JSON.stringify(estimateGraph, null, 2), "utf8")] : []),
   writeFile(join(outputDir, "ground-oam-evaluation.json"), JSON.stringify(reportMetrics, null, 2), "utf8"),
 ]);
 
@@ -1510,5 +1569,5 @@ console.log(JSON.stringify({
   meanOamControlPressure: reportMetrics.control_plane.mean_oam_control_pressure,
   oamPriorNodeEstimates: priorApplied.nodePriorEstimates,
   oamPriorLinkEstimates: priorApplied.linkPriorEstimates,
-  estimateGraph: join(outputDir, "ground-oam-estimate-graph.json"),
+  estimateGraph: writeEstimateGraph ? estimateGraphPath : "",
 }, null, 2));

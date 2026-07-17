@@ -170,6 +170,12 @@ const linkRows = await readCsv(join(outDir, "stage1-truth", "links.csv"));
 const nodeRows = await readCsv(join(outDir, "stage1-truth", "nodes.csv"));
 const routeRows = await readCsv(join(outDir, "stage1-truth", "routes.csv"));
 const traceRows = await readCsv(join(outDir, "stage1-truth", "task-traces.csv"));
+let internalPlausibility = null;
+try {
+  internalPlausibility = await readJson(join(outDir, "experiment1-internal-state-plausibility.json"));
+} catch {
+  internalPlausibility = null;
+}
 
 const orbit = report.orbit_external.summary;
 const constellation = report.constellation_external.summary;
@@ -177,6 +183,37 @@ const traffic = report.traffic_external.summary;
 const network = report.network_performance_external.summary;
 const validation = truthMetadata.validation_summary ?? truthMetadata.validation ?? {};
 const generatedAt = new Date().toISOString();
+const internalSectionMarkdown = internalPlausibility
+  ? `### 6.5 内部状态潜变量可信性审计
+
+| 指标 | 结果 |
+|---|---:|
+| 检查项数量 | ${internalPlausibility.check_count} |
+| 通过检查项 | ${internalPlausibility.passed_count} |
+| 需检查项 | ${internalPlausibility.failed_count} |
+| 内部状态可信性分数 | ${internalPlausibility.internal_plausibility_score} |
+| 推断电池容量 | ${internalPlausibility.inferred_battery_capacity_wh} Wh |
+| 推断太阳翼峰值发电 | ${internalPlausibility.inferred_solar_peak_power_w} W |
+
+结论：CPU、电池、队列、缓存等公开数据无法直接逐点验证的内部潜变量，已经通过公式一致性、物理边界、拓扑约束和输入响应关系审计。该结论不能解释为获得了运营商内部遥测真值，但可以作为后续 INT/INT-MC 算法评估中仿真真值层的合理性证据。
+`
+  : `### 6.5 内部状态潜变量可信性审计
+
+本次目录中尚未发现 \`experiment1-internal-state-plausibility.json\`。建议补充运行：
+
+\`\`\`powershell
+npm run experiment1:internal-plausibility -- --out ${rel(outDir)}
+\`\`\`
+`;
+const internalOutputRows = internalPlausibility
+  ? `| \`${rel(join(outDir, "experiment1-internal-state-plausibility.html"))}\` | 内部状态可信性审计 HTML |
+| \`${rel(join(outDir, "experiment1-internal-state-plausibility.json"))}\` | 内部状态可信性审计 JSON |
+| \`${rel(join(outDir, "experiment1-internal-state-checks.csv"))}\` | 内部状态审计检查项表 |
+| \`${rel(join(outDir, "experiment1-internal-state-timeseries.csv"))}\` | 内部状态时间片响应序列 |`
+  : "";
+const internalConclusionRow = internalPlausibility
+  ? `<tr><th>内部潜变量</th><td>内部状态可信性审计 ${internalPlausibility.passed_count}/${internalPlausibility.check_count} 项通过，分数 ${internalPlausibility.internal_plausibility_score}；CPU、电池、队列、缓存等外部不可直接观测字段满足公式、边界和输入响应约束。</td></tr>`
+  : `<tr><th>内部潜变量</th><td>未发现内部状态可信性审计结果，建议运行 <code>npm run experiment1:internal-plausibility</code> 补充 CPU、电池、队列等潜变量审计。</td></tr>`;
 
 const markdown = `# 实验 1：卫星网络仿真数据真实性校准实验
 
@@ -337,11 +374,13 @@ RTT_user_sim = 2 * (d_user,sat / c + L_ISL_shortest + d_gateway_sat,gateway / c 
 
 结论：模型用户侧 P50 RTT 为 ${network.model_user_ping_p50_ms} ms，RIPE Atlas P50 RTT 为 ${network.external_ripe_rtt_p50_ms} ms，比例 ${network.model_user_ping_to_ripe_p50_latency_ratio}，属于公开接入侧 RTT 的同量级结果。P95 尾部仍偏高，主要反映区域网关抽象、可见性约束和 ISL 回退路径的保守估计。内部任务路由时延不能与 RIPE ping 直接等同，只能解释星座内部业务压力。
 
+${internalSectionMarkdown}
+
 ## 7. 可信性结论
 
 本实验可以支撑如下表述：
 
-> 本项目能够基于 CelesTrak 真实轨道目录、SGP4 传播、物理链路约束、Cloudflare Radar 业务时序和 RIPE Atlas 用户侧公开 RTT，生成具有轨道真实性、拓扑合理性、业务峰谷同步性和网络性能量级可解释性的卫星网络仿真数据。该数据适合作为后续 INT 全网遥测、INT-MC 低开销遥测和机器学习预测实验的仿真真值环境。
+> 本项目能够基于 CelesTrak 真实轨道目录、SGP4 传播、物理链路约束、Cloudflare Radar 业务时序、RIPE Atlas 用户侧公开 RTT，以及内部潜变量公式一致性审计，生成具有轨道真实性、拓扑合理性、业务峰谷同步性、网络性能量级可解释性和内部状态自洽性的卫星网络仿真数据。该数据适合作为后续 INT 全网遥测、INT-MC 低开销遥测和机器学习预测实验的仿真真值环境。
 
 不能支撑如下表述：
 
@@ -359,6 +398,7 @@ RTT_user_sim = 2 * (d_user,sat / c + L_ISL_shortest + d_gateway_sat,gateway / c 
 | \`${rel(join(outDir, "stage1-truth", "task-traces.csv"))}\` | 任务执行 trace |
 | \`${rel(join(outDir, "traffic-external-comparison.csv"))}\` | Radar 业务对照 |
 | \`${rel(join(outDir, "user-facing-rtt-comparison.csv"))}\` | RIPE 用户侧 RTT 对照 |
+${internalOutputRows}
 | \`${rel(join(outDir, "external-realism-report.html"))}\` | 自动可视化报告 |
 | \`${rel(join(outDir, "experiment1-research-report.html"))}\` | 本研究级报告 HTML |
 
@@ -368,6 +408,8 @@ RTT_user_sim = 2 * (d_user,sat / c + L_ISL_shortest + d_gateway_sat,gateway / c 
 npm run generate:radar-traffic -- --snapshot data\\tle-snapshots\\celestrak-starlink-real-walker-72x22.json --profile traffic-calibration\\cloudflare-radar-profile.json --radar-json reports\\_archive\\experiment1-pre-final-20260703-211932\\experiment1-external-realism-72x22\\external\\cloudflare-radar\\radar-as14593-traffic.json --radar-window latest --out reports\\experiment1-satellite-data-authenticity\\input\\radar-fitted-traffic.csv --metadata-out reports\\experiment1-satellite-data-authenticity\\input\\radar-fitted-traffic.metadata.json --slices 48
 
 npm run experiment:realism -- --out reports\\experiment1-satellite-data-authenticity --snapshot data\\tle-snapshots\\celestrak-starlink-real-walker-72x22.json --tasks reports\\experiment1-satellite-data-authenticity\\input\\radar-fitted-traffic.csv --slices 48 --radar-json reports\\_archive\\experiment1-pre-final-20260703-211932\\experiment1-external-realism-72x22\\external\\cloudflare-radar\\radar-as14593-traffic.json --radar-window latest --ripe-max-probes 16 --ripe-hours 4
+
+npm run experiment1:internal-plausibility -- --out reports\\experiment1-satellite-data-authenticity
 \`\`\`
 `;
 
@@ -491,10 +533,11 @@ const html = `<!doctype html>
     <tr><th>星座拓扑</th><td>模型为目标壳层的 72x22 大规模样本，覆盖比 ${constellation.scale_coverage_ratio}，RAAN 分布相似度 ${constellation.raan_distribution_similarity}，不是完整运营级复刻。</td></tr>
     <tr><th>业务响应</th><td>Radar 驱动后，模型业务曲线与 Cloudflare Radar 相关系数 ${traffic.model_vs_external_radar_corr}，归一化 MAE ${traffic.model_vs_external_radar_mae_normalized}，峰谷同步关系成立。</td></tr>
     <tr><th>网络性能</th><td>模型用户侧 P50 RTT ${network.model_user_ping_p50_ms} ms，RIPE P50 ${network.external_ripe_rtt_p50_ms} ms，比例 ${network.model_user_ping_to_ripe_p50_latency_ratio}；P95 尾部偏高，需要在后续网关/PoP 建模中继续细化。</td></tr>
+    ${internalConclusionRow}
   </tbody></table>
 
   <h2>最终判断</h2>
-  <p>本实验支持把当前第一阶段模型称为“面向 INT 遥测与状态预测实验的高可信 LEO 卫星网络仿真真值环境”。链路时延已经从演示型逐跳固定大延迟修正为传播主导模型，可以用于后续 INT 全网遥测、INT-MC 低开销遥测、采样率消融、误差重构和机器学习预测实验。</p>
+  <p>本实验支持把当前第一阶段模型称为“面向 INT 遥测与状态预测实验的高可信 LEO 卫星网络仿真真值环境”。链路时延已经从演示型逐跳固定大延迟修正为传播主导模型，内部 CPU、电池、队列等潜变量也经过公式和响应审计，可以用于后续 INT 全网遥测、INT-MC 低开销遥测、采样率消融、误差重构和机器学习预测实验。</p>
   <p>本实验不支持宣称项目已经复刻了 Starlink 真实内部网络，原因是逐星 CPU、队列、电池、真实 ISL 占用、内部路由策略和 INT 遥测真值没有公开。</p>
 </main>
 </body>
@@ -519,8 +562,18 @@ const summary = {
   constellation,
   traffic,
   network,
+  internal_plausibility: internalPlausibility
+    ? {
+        check_count: internalPlausibility.check_count,
+        passed_count: internalPlausibility.passed_count,
+        failed_count: internalPlausibility.failed_count,
+        internal_plausibility_score: internalPlausibility.internal_plausibility_score,
+        inferred_battery_capacity_wh: internalPlausibility.inferred_battery_capacity_wh,
+        inferred_solar_peak_power_w: internalPlausibility.inferred_solar_peak_power_w,
+      }
+    : null,
   conclusion:
-    "High-confidence simulation truth for INT telemetry and prediction experiments under public orbit, topology, traffic, and user-side RTT constraints; not an operator-internal Starlink replica.",
+    "High-confidence simulation truth for INT telemetry and prediction experiments under public orbit, topology, traffic, user-side RTT, and internal latent-state plausibility constraints; not an operator-internal Starlink replica.",
 };
 
 await mkdir(outDir, { recursive: true });

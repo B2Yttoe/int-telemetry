@@ -99,7 +99,7 @@ let downloadedFrom = sourceUrl;
 if (!useCacheOnly) {
   const response = await fetch(sourceUrl, {
     headers: {
-      "user-agent": "INT-Temerity/0.1 real-tle-snapshot",
+      "user-agent": "INT-Telemetry/0.1 real-tle-snapshot",
       accept: "application/json,text/plain;q=0.8,*/*;q=0.5",
     },
   });

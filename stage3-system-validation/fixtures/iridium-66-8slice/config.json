@@ -1,0 +1,40 @@
+{
+  "schema_version": "experiment13-system-validation-config-v1",
+  "profile_id": "iridium-next-small",
+  "profile_label": "Iridium NEXT 66",
+  "slice_count": 8,
+  "slice_duration_s": 1,
+  "load_scales": [
+    0.6,
+    1,
+    1.4
+  ],
+  "variants": [
+    "no-int",
+    "full-int",
+    "leo-selective"
+  ],
+  "seed": 11,
+  "mtu_bytes": 1500,
+  "ipv4_udp_overhead_bytes": 28,
+  "queue_packets": 100,
+  "business_packet_bytes": 1200,
+  "probe_base_bytes": 128,
+  "full_metadata_bytes_per_hop": 96,
+  "probe_interval_ms": 50,
+  "target_p90_business_utilization": 0.6,
+  "report_timeout_s": 2,
+  "comparison_control": {
+    "policy": "same-probe-paths-same-intervals-different-per-hop-metadata-only",
+    "full_int_metadata": "96-bytes-at-every-physical-hop",
+    "leo_selective_metadata": "reuse-exported-full-compact-forward-only-hop-plan",
+    "inserted_repair_hops": "full-int-writes-96-bytes-leo-selective-is-forward-only"
+  },
+  "business_rate_calibration": {
+    "policy": "global-scale-so-path-derived-active-link-utilization-p90-equals-target",
+    "target_p90_utilization": 0.6,
+    "raw_p90_utilization": 21.584317,
+    "scale": 0.027798,
+    "calibrated_p90_utilization": 0.6
+  }
+}

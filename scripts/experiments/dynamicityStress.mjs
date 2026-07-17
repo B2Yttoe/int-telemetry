@@ -14,6 +14,13 @@ function stableScore(seed, sliceIndex, linkId) {
     .digest("hex");
 }
 
+function sortedByStableScore(rows, seed, phase, idFn = (row) => row.link_id) {
+  return rows
+    .map((row, index) => ({ row, index, score: stableScore(seed, phase, idFn(row)) }))
+    .sort((left, right) => left.score.localeCompare(right.score) || left.index - right.index)
+    .map(({ row }) => row);
+}
+
 function numericSlice(row) {
   const value = Number(row?.slice_index);
   return Number.isFinite(value) ? value : 0;
@@ -78,9 +85,11 @@ function candidateForMask(rows, mask) {
 }
 
 function eligibleForSlice(rows, seed, phaseIndex) {
-  return rows
-    .filter((row) => row.kind === "inter-plane" && isActive(row))
-    .sort((left, right) => stableScore(seed, phaseIndex, left.link_id).localeCompare(stableScore(seed, phaseIndex, right.link_id)));
+  return sortedByStableScore(
+    rows.filter((row) => row.kind === "inter-plane" && isActive(row)),
+    seed,
+    phaseIndex,
+  );
 }
 
 function mutationRows(originalRows, transformedRows, targetStressRate) {
@@ -110,6 +119,7 @@ export function transformDynamicityTrace({
   links = [],
   targetStressRate,
   seed = "experiment8",
+  initialMaskSeed = seed,
   tolerance = 0.01,
   forcedDownFraction = 0.25,
 } = {}) {
@@ -142,27 +152,28 @@ export function transformDynamicityTrace({
 
   slices.forEach((sliceIndex, position) => {
     const originalRows = grouped.get(sliceIndex).map((row) => ({ ...row }));
-    const eligible = eligibleForSlice(originalRows, seed, `eligible:${sliceIndex}`);
+    const eligible = eligibleForSlice(originalRows, initialMaskSeed, `eligible:${sliceIndex}`);
     const eligibleIds = new Set(eligible.map((row) => String(row.link_id)));
     const targetMaskSize = Math.max(0, Math.min(eligible.length, Math.round(forcedDownFraction * eligible.length)));
     let mask = new Set([...previousMask].filter((id) => eligibleIds.has(id)));
     let naturalMaskReplacements = 0;
     if (position === 0) {
       mask = new Set(
-        eligibleForSlice(originalRows, seed, "initial-mask")
+        eligibleForSlice(originalRows, initialMaskSeed, "initial-mask")
           .slice(0, targetMaskSize)
           .map((row) => String(row.link_id)),
       );
     } else {
-      const removeExcess = [...mask]
-        .sort((left, right) => stableScore(seed, `trim:${sliceIndex}`, left).localeCompare(stableScore(seed, `trim:${sliceIndex}`, right)));
+      const removeExcess = sortedByStableScore([...mask], seed, `trim:${sliceIndex}`, (id) => id);
       while (mask.size > targetMaskSize) {
         mask.delete(removeExcess.shift());
         naturalMaskReplacements += 1;
       }
-      const fill = eligible
-        .filter((row) => !mask.has(String(row.link_id)))
-        .sort((left, right) => stableScore(seed, `fill:${sliceIndex}`, left.link_id).localeCompare(stableScore(seed, `fill:${sliceIndex}`, right.link_id)));
+      const fill = sortedByStableScore(
+        eligible.filter((row) => !mask.has(String(row.link_id))),
+        seed,
+        `fill:${sliceIndex}`,
+      );
       while (mask.size < targetMaskSize && fill.length > 0) {
         mask.add(String(fill.shift().link_id));
         naturalMaskReplacements += 1;
@@ -174,12 +185,13 @@ export function transformDynamicityTrace({
       cumulativeTransitionEligible += eligible.length;
       const desiredCumulativeSwaps = Math.round((targetStressRate * cumulativeTransitionEligible) / 2);
       const requestedSwaps = Math.max(0, desiredCumulativeSwaps - cumulativeSwapEvents);
-      const removable = [...mask]
-        .sort((left, right) => stableScore(seed, `swap-out:${sliceIndex}`, left).localeCompare(stableScore(seed, `swap-out:${sliceIndex}`, right)));
-      const addable = eligible
-        .map((row) => String(row.link_id))
-        .filter((id) => !mask.has(id))
-        .sort((left, right) => stableScore(seed, `swap-in:${sliceIndex}`, left).localeCompare(stableScore(seed, `swap-in:${sliceIndex}`, right)));
+      const removable = sortedByStableScore([...mask], seed, `swap-out:${sliceIndex}`, (id) => id);
+      const addable = sortedByStableScore(
+        eligible.map((row) => String(row.link_id)).filter((id) => !mask.has(id)),
+        seed,
+        `swap-in:${sliceIndex}`,
+        (id) => id,
+      );
       controlledSwapCount = Math.min(requestedSwaps, removable.length, addable.length);
       for (let index = 0; index < controlledSwapCount; index += 1) {
         mask.delete(removable[index]);
@@ -236,6 +248,7 @@ export function transformDynamicityTrace({
     bySlice,
     summary: {
       seed,
+      initial_mask_seed: initialMaskSeed,
       target_stress_rate: targetStressRate,
       achieved_stress_rate: achievedStressRate,
       achieved_controlled_churn_rate: achievedStressRate,

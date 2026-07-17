@@ -1,0 +1,52 @@
+{
+  "schema": "int-telemetry-experiment14b-source-lifecycle-amendment/v4",
+  "status": "pre-registered-before-causally-fresh-orbit-input",
+  "parent_experiment": "experiment14b-prospective-external-validation",
+  "input_acceptance": {
+    "acquired_after_parent_freeze": true,
+    "content_hash_must_differ_from_prefreeze_seed": true,
+    "minimum_selected_shell_median_epoch_advance_hours": 0.1,
+    "parent_age_gate_must_pass": true,
+    "window_end_age_gate_must_pass": true
+  },
+  "model_input_source": {
+    "primary": "standard GP",
+    "allowed_failover": "preregistered Starlink Supplemental GP",
+    "failover_requires_separate_frozen_amendment": true,
+    "age_threshold_relaxation_allowed": false,
+    "future_validation_must_use_same_source_family": true
+  },
+  "input_lock": {
+    "lock_after_first_complete_topology": true,
+    "locked_artifacts": [
+      "selected GP0 model input",
+      "selected 72x22 Walker snapshot",
+      "topology nodes CSV",
+      "topology links CSV"
+    ],
+    "allow_input_refresh_after_lock": false,
+    "hash_semantics": {
+      "source_content_sha256": "detects a new CelesTrak source version before JSON reformatting",
+      "artifact_file_sha256": "detects local modification of each locked on-disk artifact"
+    }
+  },
+  "remaining_collection": {
+    "future_orbit_uses_separate_cache": true,
+    "future_orbit_hash_must_differ_from_locked_input": true,
+    "future_orbit_acquired_after_validation_window": true,
+    "future_orbit_lock_after_first_accepted_snapshot": true,
+    "allow_future_orbit_refresh_after_lock": false,
+    "radar_and_ripe_do_not_refresh_orbit_input": true
+  },
+  "bounded_snapshot_retention": {
+    "continuous_orbit_refresh": false,
+    "retained_model_input_snapshots": 1,
+    "retained_future_validation_snapshots": 1,
+    "maximum_retained_orbit_snapshots_per_run": 2,
+    "delete_unaccepted_candidate_downloads": true,
+    "delete_source_cache_after_each_snapshot_lock": true,
+    "refresh_derived_topology_after_input_lock": false,
+    "validity_semantics": "The model represents one frozen GP0 snapshot propagated only inside the preregistered experiment window. GP1 uses the same source family, is a blind future reference, and is never fed back into the model."
+  },
+  "rationale": "A post-freeze HTTP timestamp alone does not prove that the source content changed. Re-fetching the model input after topology generation could also create a snapshot/topology mismatch. This amendment adds a content-and-epoch gate, permits only the separately frozen same-threshold Supplemental GP failover after the primary standard GP gate fails, makes GP0 immutable, locks the first same-source-family GP1 as a blind reference, and bounds retained model orbit data to exactly those two logical snapshots."
+}

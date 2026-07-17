@@ -91,6 +91,32 @@ function mean(values) {
   return values.reduce((total, value) => total + value, 0) / values.length;
 }
 
+function minFinite(values, fallback = 0) {
+  let result = Infinity;
+  for (const value of values) {
+    if (Number.isFinite(value) && value < result) result = value;
+  }
+  return result === Infinity ? fallback : result;
+}
+
+function maxFinite(values, fallback = 0) {
+  let result = -Infinity;
+  for (const value of values) {
+    if (Number.isFinite(value) && value > result) result = value;
+  }
+  return result === -Infinity ? fallback : result;
+}
+
+function percentile(values, q) {
+  const usable = values.filter(Number.isFinite).sort((left, right) => left - right);
+  if (usable.length === 0) return NaN;
+  const position = clamp(q, 0, 1) * (usable.length - 1);
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  if (lower === upper) return usable[lower];
+  return usable[lower] + (usable[upper] - usable[lower]) * (position - lower);
+}
+
 function groupBy(rows, keyFn) {
   const map = new Map();
   rows.forEach((row) => {
@@ -166,7 +192,7 @@ function orbitalPeriodMinutes(altitudeKm) {
 function deriveEngineeringParameters({ links, nodes, metadata, args }) {
   const sliceCount = numberValue(metadata?.slice_count, new Set(links.map((row) => row.slice_index)).size);
   const stepMinutes = deriveStepMinutes(links);
-  const firstSlice = String(Math.min(...links.map((row) => numberValue(row.slice_index))));
+  const firstSlice = String(minFinite(links.map((row) => numberValue(row.slice_index)), 0));
   const firstSliceNodes = nodes.filter((node) => String(node.slice_index) === firstSlice);
   const altitudeFromNodes = mean(firstSliceNodes.map((node) => numberValue(node.altitude_km, NaN)).filter(Number.isFinite));
   const altitudeFromMetadata = numberValue(metadata?.tle_snapshot_mean_altitude_km, NaN);
@@ -179,6 +205,22 @@ function deriveEngineeringParameters({ links, nodes, metadata, args }) {
   const orbitalWindowSlices = clamp(Math.round(orbitPeriod / Math.max(stepMinutes, 1)), 12, Math.max(12, sliceCount));
   const refreshSlicesDefault = Math.max(1, Math.round(30 / Math.max(stepMinutes, 1)));
   const horizonSlicesDefault = Math.min(sliceCount, Math.max(orbitalWindowSlices * 2, refreshSlicesDefault));
+  const activeLinks = links.filter((link) => boolValue(link.is_active));
+  const activeIslLinks = activeLinks.filter((link) => link.kind !== "star-ground");
+  const activeInterPlaneLinks = activeLinks.filter((link) => link.kind === "inter-plane");
+  const activeSglLinks = activeLinks.filter((link) => link.kind === "star-ground");
+  const activeIslCapacities = activeIslLinks.map((link) => numberValue(link.capacity_mbps, NaN));
+  const activeSglCapacities = activeSglLinks.map((link) => numberValue(link.capacity_mbps, NaN));
+  const activeIslSnr = activeIslLinks.map((link) => numberValue(link.sinr_db || link.snr_db, NaN));
+  const activeSglSnr = activeSglLinks.map((link) => numberValue(link.sinr_db || link.snr_db, NaN));
+  const activeIslDistances = activeIslLinks.map((link) => numberValue(link.distance_km, NaN));
+  const activeInterPlaneDistances = activeInterPlaneLinks.map((link) => numberValue(link.distance_km, NaN));
+  const autoInterPlaneMaxDistanceKm = Math.max(3600, numberValue(percentile(activeInterPlaneDistances, 0.98) * 1.05, 3600));
+  const autoIslMaxRangeKm = Math.max(autoInterPlaneMaxDistanceKm, numberValue(percentile(activeIslDistances, 0.98) * 1.05, 6500));
+  const autoMinIslCapacityMbps = Math.max(1, numberValue(percentile(activeIslCapacities, 0.05) * 0.9, 100));
+  const autoMinSglCapacityMbps = Math.max(0.5, numberValue(percentile(activeSglCapacities, 0.05) * 0.9, 50));
+  const autoMinIslSnrDb = numberValue(percentile(activeIslSnr, 0.05) - 1, 6);
+  const autoMinSglSnrDb = numberValue(percentile(activeSglSnr, 0.05) - 1, 5);
 
   return {
     slice_count: sliceCount,
@@ -190,13 +232,13 @@ function deriveEngineeringParameters({ links, nodes, metadata, args }) {
     completion_window_slices: numberArg(args, "--completion-window-slices", orbitalWindowSlices),
     topology_class_threshold: numberArg(args, "--topology-class-threshold", 0.08),
     active_probability_threshold: numberArg(args, "--active-probability-threshold", 0.5),
-    inter_plane_max_distance_km: numberArg(args, "--inter-plane-max-distance-km", 3600),
-    isl_antenna_max_range_km: numberArg(args, "--isl-antenna-max-range-km", 6500),
+    inter_plane_max_distance_km: numberArg(args, "--inter-plane-max-distance-km", autoInterPlaneMaxDistanceKm),
+    isl_antenna_max_range_km: numberArg(args, "--isl-antenna-max-range-km", autoIslMaxRangeKm),
     sgl_antenna_max_range_km: numberArg(args, "--sgl-antenna-max-range-km", 4200),
-    min_isl_capacity_mbps: numberArg(args, "--min-isl-capacity-mbps", 100),
-    min_sgl_capacity_mbps: numberArg(args, "--min-sgl-capacity-mbps", 50),
-    min_isl_snr_db: numberArg(args, "--min-isl-snr-db", 6),
-    min_sgl_snr_db: numberArg(args, "--min-sgl-snr-db", 5),
+    min_isl_capacity_mbps: numberArg(args, "--min-isl-capacity-mbps", autoMinIslCapacityMbps),
+    min_sgl_capacity_mbps: numberArg(args, "--min-sgl-capacity-mbps", autoMinSglCapacityMbps),
+    min_isl_snr_db: numberArg(args, "--min-isl-snr-db", autoMinIslSnrDb),
+    min_sgl_snr_db: numberArg(args, "--min-sgl-snr-db", autoMinSglSnrDb),
     min_availability_factor: numberArg(args, "--min-availability-factor", 0.85),
   };
 }
@@ -220,7 +262,7 @@ function predictLink(link, params) {
   const lineOfSight = boolValue(link.line_of_sight);
   const distanceKm = numberValue(link.distance_km, NaN);
   const distanceThreshold = distanceThresholdFor(link, params);
-  const capacity = numberValue(link.effective_capacity_mbps || link.capacity_mbps, NaN);
+  const capacity = numberValue(link.capacity_mbps || link.effective_capacity_mbps, NaN);
   const snr = numberValue(link.sinr_db || link.snr_db, NaN);
   const availabilityFactor = numberValue(link.availability_factor, 1);
   const solarBlocked = boolValue(link.solar_interference_blocked);
@@ -332,8 +374,8 @@ function buildPredictionWindows(topology, params) {
       replan_slices: freshClassPlans,
       estimated_reuse_ratio: round(reusableSlices / Math.max(windowRows.length, 1)),
       mean_predicted_active_links: round(mean(windowRows.map((row) => numberValue(row.predicted_active_links)))),
-      min_predicted_active_links: Math.min(...windowRows.map((row) => numberValue(row.predicted_active_links))),
-      max_predicted_active_links: Math.max(...windowRows.map((row) => numberValue(row.predicted_active_links))),
+      min_predicted_active_links: minFinite(windowRows.map((row) => numberValue(row.predicted_active_links))),
+      max_predicted_active_links: maxFinite(windowRows.map((row) => numberValue(row.predicted_active_links))),
     });
   }
 
@@ -370,7 +412,7 @@ function buildTopologyForecastBySlice(rows, topology, params) {
     }
     const nextClassTransition = futureOnly.find((future) => future.topology_class_id !== slice.topology_class_id);
     const nextMajorDrift = futureRows.find((future, index) => index > 0 && similarities[index] < majorDriftThreshold);
-    const minSimilarity = similarities.length ? Math.min(...similarities) : 1;
+    const minSimilarity = similarities.length ? minFinite(similarities, 1) : 1;
     const meanSimilarity = mean(similarities);
     const classTransitionCount = futureOnly.filter((future, index) =>
       future.topology_class_id !== futureRows[index].topology_class_id,
@@ -557,11 +599,19 @@ const contactPlan = {
   evaluation,
   entries: predictionRows,
 };
+const contactPlanMetadata = {
+  ...contactPlan,
+  entries_csv: join(outputDir, "predicted-contact-plan.csv"),
+};
+delete contactPlanMetadata.entries;
 
 await mkdir(outputDir, { recursive: true });
+// Write the large representations sequentially so their serialization buffers
+// do not coexist at the Starlink scale.
+await writeFile(join(outputDir, "predicted-contact-plan.json"), JSON.stringify(contactPlan, null, 2), "utf8");
+await writeFile(join(outputDir, "predicted-contact-plan.csv"), rowsToCsv(predictionRows), "utf8");
 await Promise.all([
-  writeFile(join(outputDir, "predicted-contact-plan.json"), JSON.stringify(contactPlan, null, 2), "utf8"),
-  writeFile(join(outputDir, "predicted-contact-plan.csv"), rowsToCsv(predictionRows), "utf8"),
+  writeFile(join(outputDir, "predicted-contact-plan-metadata.json"), JSON.stringify(contactPlanMetadata, null, 2), "utf8"),
   writeFile(join(outputDir, "predicted-contact-plan-summary.csv"), rowsToCsv(topology.per_slice), "utf8"),
   writeFile(join(outputDir, "predicted-topology-forecast.csv"), rowsToCsv(topologyForecastRows), "utf8"),
   writeFile(join(outputDir, "predicted-contact-plan-windows.csv"), rowsToCsv(predictionWindows), "utf8"),

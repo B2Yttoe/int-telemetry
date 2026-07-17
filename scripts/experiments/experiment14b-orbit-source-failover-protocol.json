@@ -1,0 +1,45 @@
+{
+  "schema": "int-telemetry-experiment14b-orbit-source-failover-amendment/v1",
+  "status": "registered-after-standard-gp-age-gate-failure-before-topology-and-user-performance-scoring",
+  "parent_experiment": "experiment14b-prospective-external-validation",
+  "trigger": {
+    "standard_gp_was_preregistered_primary": true,
+    "standard_gp_selected_shell_failed_original_age_gate": true,
+    "do_not_relax_original_age_thresholds": true
+  },
+  "deterministic_source_priority": [
+    "use standard GP when the original start and window-end age gates pass",
+    "otherwise use the already-preregistered Starlink Supplemental GP only when it passes the same gates",
+    "otherwise keep the experiment pending"
+  ],
+  "supplemental_acceptance": {
+    "source_url_must_equal_parent_supplemental_gp_url": true,
+    "acquired_after_parent_freeze": true,
+    "content_hash_must_differ_from_prefreeze_supplemental_snapshot": true,
+    "minimum_selected_shell_median_epoch_advance_hours": 0.1,
+    "minimum_selected_satellites": 1584,
+    "start_age_gate_must_pass": true,
+    "window_end_age_gate_must_pass": true,
+    "downstream_rtt_or_throughput_scores_must_not_select_source": true
+  },
+  "topology_window": {
+    "slices": 48,
+    "step_minutes": 5,
+    "duration_hours": 4,
+    "propagator": "SGP4",
+    "selection": "largest coherent public Starlink shell bin with enough satellites, RAAN clustering, and even phase sampling",
+    "fixed_experimental_layout": "72x22"
+  },
+  "future_validation": {
+    "use_same_source_family_as_model_input": true,
+    "first_accepted_future_snapshot_is_immutable": true,
+    "future_snapshot_is_validation_only": true,
+    "future_snapshot_is_never_fed_back_into_model": true
+  },
+  "claim_boundary": "Supplemental GP is a CelesTrak GP fit derived from SpaceX public ephemeris. The selected satellites carry real public orbit elements, while the fixed 72x22 plane-slot layout and potential ISLs remain an experimental Walker mapping rather than an operator-published Starlink ISL schedule.",
+  "official_sources": [
+    "https://celestrak.org/NORAD/elements/supplemental/",
+    "https://celestrak.org/NORAD/documentation/sup-gp-queries.php",
+    "https://www.celestrak.org/usage-policy.php"
+  ]
+}

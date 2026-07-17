@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { readCsvStream } from "./csv-stream.mjs";
 import {
   buildMultiObjectiveBudgetControl,
   multiObjectivePathScore,
@@ -13,6 +14,35 @@ import {
   buildObservableRoutes,
   scheduleObservableRows,
 } from "./int-mc-observability.mjs";
+import {
+  DEFAULT_TOPOLOGY_VERSIONED_OBJECTIVE_WEIGHTS,
+  buildTopologyVersionId,
+  chooseConservativeObjectiveCandidate,
+  evaluateTopologyVersionedPathObjective,
+} from "./topology-versioned-active-telemetry.mjs";
+import {
+  assessCachedPathImpact,
+  buildTopologyVersion,
+  chooseTopologyVersionedPlan,
+  prefilterTopologyPlanningModes,
+  refillCandidatesToFixedBudget,
+  selectIncrementalRepairCandidates,
+  selectStructuralCacheBase,
+} from "./topology-versioned-risk-planner.mjs";
+import { buildScaleAdaptiveTelemetryBudget } from "./scale-adaptive-telemetry-budget.mjs";
+import {
+  attachImportanceAwareMetadataPlans,
+  buildRotatingPlaneRepresentatives,
+  buildTargetPreservingRepair,
+  buildPathMetadataPlan,
+  buildImportanceAwareTargetPlan,
+  computeBoundedAdditiveRepairPathLimit,
+  computeAoIAdjustedPathCount,
+  currentSelectionImportanceRepairFields,
+  selectBoundedImportanceRepairRows,
+  selectBudgetNeutralImportanceReplacements,
+  shouldUseAoIDebtOverride,
+} from "./importance-aware-telemetry.mjs";
 
 function argValue(args, name, fallback = "") {
   const index = args.indexOf(name);
@@ -98,6 +128,24 @@ function optionalNumber(value) {
   return Number.isFinite(parsed) ? parsed : NaN;
 }
 
+function buildScaleBudgetReference(rows) {
+  const budgets = new Map();
+  for (const row of rows) {
+    const sliceIndex = String(row.slice_index ?? "").trim();
+    if (!sliceIndex) throw new Error("scale budget reference row is missing slice_index");
+    if (budgets.has(sliceIndex)) {
+      throw new Error(`scale budget reference contains duplicate slice_index: ${sliceIndex}`);
+    }
+    const rawBudget = row.scale_budget_bytes ?? row.budget_bytes;
+    const budget = Math.floor(Number(rawBudget));
+    if (!Number.isFinite(budget) || budget <= 0) {
+      throw new Error(`scale budget reference has an invalid budget for slice ${sliceIndex}: ${rawBudget}`);
+    }
+    budgets.set(sliceIndex, budget);
+  }
+  return budgets;
+}
+
 function round(value, digits = 4) {
   if (!Number.isFinite(value)) return 0;
   return Number(value.toFixed(digits));
@@ -141,6 +189,62 @@ async function readCsv(path) {
 
 async function readJson(path) {
   return JSON.parse(await readFile(path, "utf8"));
+}
+
+const TRUTH_LINK_PLANNER_COLUMNS = [
+  "slice_index", "time", "minute", "link_id", "source", "target", "kind",
+  "is_active", "p_available", "availability_factor", "design_candidate",
+  "line_of_sight", "distance_km", "distance_threshold_km", "capacity_mbps",
+  "effective_capacity_mbps", "sinr_db", "snr_db", "solar_interference_blocked",
+  "restriction_reason",
+];
+
+const TRUTH_NODE_PLANNER_COLUMNS = [
+  "slice_index", "time", "minute", "node_id", "label", "plane", "slot",
+  "shell_id", "latitude", "longitude", "altitude_km", "x", "y", "z",
+  "in_sunlight", "solar_exposure", "solar_power_w", "battery_capacity_wh",
+  "min_state_of_charge", "base_power_w",
+];
+
+const ROUTE_PLANNER_COLUMNS = [
+  "slice_index", "time", "minute", "task_id", "source", "target", "node_id",
+  "link_ids", "path", "hop_count", "path_link_count", "status", "traffic_mbps",
+  "priority", "created_slice",
+];
+
+const PREDICTED_LINK_PLANNER_COLUMNS = [
+  "slice_index", "time", "minute", "link_id", "source", "target", "kind",
+  "predicted_active", "p_available", "confidence", "predicted_reason",
+  "line_of_sight", "distance_km", "distance_threshold_km", "capacity_mbps",
+  "sinr_db", "availability_factor",
+];
+
+const OAM_LINK_PLANNER_COLUMNS = [
+  "slice_index", "link_id", "status_estimate", "confidence", "state_age_slices",
+  "last_observed_slice", "confidence_state", "conflict_severity",
+  "oam_conflict_severity", "latency_ms_estimate", "queue_latency_ms_estimate",
+  "utilization_percent_estimate", "congestion_percent_estimate",
+  "queued_traffic_mb_estimate", "dropped_traffic_mb_estimate",
+  "packet_error_rate_estimate", "observation_source",
+];
+
+const OAM_NODE_PLANNER_COLUMNS = [
+  "slice_index", "node_id", "confidence", "state_age_slices", "last_observed_slice",
+  "confidence_state", "conflict_severity", "oam_conflict_severity",
+  "observation_source", "cpu_percent_estimate", "queue_depth_estimate",
+  "queued_traffic_mb_estimate", "cache_used_mb_estimate", "energy_percent_estimate",
+  "mode_estimate",
+];
+
+async function readPredictedContactPlan(path) {
+  const metadataPath = join(resolve(path, ".."), "predicted-contact-plan-metadata.json");
+  const entriesPath = join(resolve(path, ".."), "predicted-contact-plan.csv");
+  if (!existsSync(metadataPath) || !existsSync(entriesPath)) return readJson(path);
+  const [metadata, entries] = await Promise.all([
+    readJson(metadataPath),
+    readCsvStream(entriesPath, { columns: PREDICTED_LINK_PLANNER_COLUMNS }),
+  ]);
+  return { ...metadata, entries };
 }
 
 function hashText(value) {
@@ -254,7 +358,7 @@ function topologySimilarity(left, right) {
   const utilization = similarityFromDistance(left.mean_utilization, right.mean_utilization, 35);
   const latency = similarityFromDistance(left.mean_latency, right.mean_latency, 45);
   const availability = similarityFromDistance(left.mean_availability, right.mean_availability, 0.35);
-  const score =
+  const legacyCompositeScore =
     0.27 * active +
     0.13 * interPlane +
     0.1 * bottleneck +
@@ -263,8 +367,18 @@ function topologySimilarity(left, right) {
     0.08 * utilization +
     0.06 * latency +
     0.06 * availability;
+  const structuralScore = 0.8 * active + 0.2 * interPlane;
+  const dynamicScore =
+    0.2 * bottleneck +
+    0.22 * routePath +
+    0.28 * linkState +
+    0.12 * utilization +
+    0.09 * latency +
+    0.09 * availability;
   return {
-    score: round(score, 5),
+    score: round(legacyCompositeScore, 5),
+    structural_score: round(structuralScore, 5),
+    dynamic_score: round(dynamicScore, 5),
     active_jaccard: round(active, 5),
     inter_plane_jaccard: round(interPlane, 5),
     bottleneck_jaccard: round(bottleneck, 5),
@@ -288,7 +402,7 @@ function percentile(values, q) {
 
 function thresholdCalibrationDetails({ scoredClasses, profile, futureProfiles, baseThreshold }) {
   const scores = scoredClasses
-    .map((item) => item.similarity.score)
+    .map((item) => item.similarity.structural_score ?? item.similarity.score)
     .filter(Number.isFinite)
     .sort((left, right) => right - left);
   const bestScore = scores[0] ?? 1;
@@ -306,7 +420,7 @@ function thresholdCalibrationDetails({ scoredClasses, profile, futureProfiles, b
     ? clamp((bestSecondGap - 0.12) * 0.18, 0, 0.045)
     : 0;
   const futureSimilarities = futureProfiles
-    .map((futureProfile) => topologySimilarity(profile, futureProfile).score)
+    .map((futureProfile) => topologySimilarity(profile, futureProfile).structural_score)
     .filter(Number.isFinite);
   const futureMeanSimilarity = mean(futureSimilarities);
   const futureMinSimilarity = futureSimilarities.length ? Math.min(...futureSimilarities) : 1;
@@ -355,7 +469,7 @@ function thresholdCalibrationDetails({ scoredClasses, profile, futureProfiles, b
 function topologyForecastDetails({ profile, futureProfiles, similarityThreshold }) {
   const threshold = clamp(similarityThreshold, 0.7, 0.99);
   const similarities = futureProfiles
-    .map((futureProfile) => topologySimilarity(profile, futureProfile).score)
+    .map((futureProfile) => topologySimilarity(profile, futureProfile).structural_score)
     .filter(Number.isFinite);
   let stableWindow = 1;
   for (const value of similarities) {
@@ -434,12 +548,7 @@ function adaptiveReuseThresholdDetails({
   const threshold = clamp(
     baseThreshold +
       volatilityPenalty +
-      bottleneckPenalty +
-      loadPenalty +
-      contactUncertaintyPenalty +
       structuralDriftPenalty +
-      linkStateDriftPenalty +
-      routeDriftPenalty +
       oamPressurePenalty -
       stabilityCredit -
       overheadCredit +
@@ -449,12 +558,12 @@ function adaptiveReuseThresholdDetails({
   );
   const reasons = [
     volatilityPenalty > 0.005 ? "tighten-volatility" : "",
-    bottleneckPenalty > 0.005 ? "tighten-bottleneck" : "",
-    loadPenalty > 0.005 ? "tighten-load" : "",
-    contactUncertaintyPenalty > 0.005 ? "tighten-contact-uncertainty" : "",
+    bottleneckPenalty > 0.005 ? "dynamic-score-bottleneck-risk" : "",
+    loadPenalty > 0.005 ? "dynamic-score-load-risk" : "",
+    contactUncertaintyPenalty > 0.005 ? "dynamic-score-contact-risk" : "",
     structuralDriftPenalty > 0.005 ? "tighten-structural-drift" : "",
-    linkStateDriftPenalty > 0.005 ? "tighten-link-state-drift" : "",
-    routeDriftPenalty > 0.005 ? "tighten-route-drift" : "",
+    linkStateDriftPenalty > 0.005 ? "dynamic-score-link-state-drift" : "",
+    routeDriftPenalty > 0.005 ? "dynamic-score-route-drift" : "",
     oamPressurePenalty > 0.005 ? "tighten-oam-pressure" : "",
     thresholdCalibration.ambiguity_penalty > 0.005 ? "tighten-calibrated-class-ambiguity" : "",
     thresholdCalibration.future_drift_penalty > 0.005 ? "tighten-calibrated-future-drift" : "",
@@ -498,12 +607,7 @@ function adaptiveReuseThresholdDetails({
     calibration_net_adjustment: thresholdCalibration.net_adjustment,
     total_tightening: round(
       volatilityPenalty +
-        bottleneckPenalty +
-        loadPenalty +
-        contactUncertaintyPenalty +
         structuralDriftPenalty +
-        linkStateDriftPenalty +
-        routeDriftPenalty +
         oamPressurePenalty +
         thresholdCalibration.ambiguity_penalty +
         thresholdCalibration.future_drift_penalty,
@@ -517,7 +621,11 @@ function adaptiveReuseThresholdDetails({
         thresholdCalibration.sample_support_credit,
       5,
     ),
-    policy: "calibrated-tighten-on-drift-oam-risk-relax-on-stability-planning-pressure",
+    dynamic_score_risk: round(
+      bottleneckPenalty + loadPenalty + contactUncertaintyPenalty + linkStateDriftPenalty + routeDriftPenalty,
+      5,
+    ),
+    policy: "structural-cache-threshold-with-dynamic-state-rescoring",
     reason: reasons.length ? reasons.join(" > ") : "base-threshold",
   };
 }
@@ -921,6 +1029,7 @@ function buildAdaptiveProbeBudget({
 
 function planningReuseMode(candidateSource, topologyReuseDecision) {
   if (candidateSource === "topology-reuse-cache") return "cache-reuse-with-validation";
+  if (candidateSource === "topology-reuse-cache-local-repair") return "cache-reuse-with-local-repair";
   if (candidateSource === "fresh-slice-plan-fallback") return "fallback-fresh-replan";
   if (topologyReuseDecision === "oam-feedback-refresh-replan") return "oam-forced-fresh-replan";
   if (topologyReuseDecision === "oam-control-refresh-replan") return "oam-forced-fresh-replan";
@@ -951,14 +1060,16 @@ function estimatePlanningCost({
   const fallbackPenalty = candidateSource === "fresh-slice-plan-fallback" ? candidates * 0.2 : 0;
   const mode = planningReuseMode(candidateSource, topologyReuseDecision);
   const actualCost = mode === "cache-reuse-with-validation"
-    ? reuseValidationCost + repairCost + oamFeedbackCost
-    : fullReplanCost + fallbackPenalty;
+    ? reuseValidationCost + oamFeedbackCost
+    : mode === "cache-reuse-with-local-repair"
+      ? reuseValidationCost + repairCost + oamFeedbackCost
+      : fullReplanCost + fallbackPenalty;
   const savedCost = Math.max(0, fullReplanCost - actualCost);
   const savingRatio = fullReplanCost > 0 ? savedCost / fullReplanCost : 0;
 
   return {
     planning_reuse_mode: mode,
-    planning_cache_hit: mode === "cache-reuse-with-validation",
+    planning_cache_hit: mode === "cache-reuse-with-validation" || mode === "cache-reuse-with-local-repair",
     planning_local_repair_applied: repairedCandidatePaths > 0,
     planning_full_replan_cost_units: round(fullReplanCost),
     planning_actual_cost_units: round(actualCost),
@@ -1073,7 +1184,10 @@ function buildContactPlan({
       item,
       similarity: topologySimilarity(profile, item.prototypeProfile),
     }));
-    scoredClasses.sort((left, right) => right.similarity.score - left.similarity.score);
+    scoredClasses.sort((left, right) =>
+      right.similarity.structural_score - left.similarity.structural_score ||
+      right.similarity.score - left.similarity.score
+    );
     const bestClass = scoredClasses[0] ?? null;
     const oamFeedbackPressure = oamSlicePressure(oamFeedbackBySlice?.get(String(sliceIndex)));
     const oamControl = oamControlForSlice(oamControlBySlice, sliceIndex);
@@ -1147,7 +1261,7 @@ function buildContactPlan({
       futureProfiles,
       similarityThreshold: adaptiveThreshold,
     });
-    const reusableByTopology = bestClass && bestClass.similarity.score >= adaptiveThreshold;
+    const reusableByTopology = bestClass && bestClass.similarity.structural_score >= adaptiveThreshold;
     const oamFeedbackLocalRetargetTriggered = adaptiveReuse &&
       oamFeedbackPressure.pressure >= oamReplanPressureThreshold &&
       Boolean(reusableByTopology);
@@ -1171,13 +1285,15 @@ function buildContactPlan({
       };
       classes.push(contactClass);
     } else {
-      previousAcceptedSimilarity = bestClass.similarity.score;
+      previousAcceptedSimilarity = bestClass.similarity.structural_score;
     }
     contactClass.slices.push(Number(sliceIndex));
     perSlice.push({
       slice_index: Number(sliceIndex),
       time: links[0]?.time ?? "",
       topology_class_id: contactClass.class_id,
+      topology_signature: signature,
+      topology_version_id: buildTopologyVersionId(contactClass.class_id, signature),
       topology_reused_from_class: reused,
       topology_reuse_decision: reused
         ? oamControlLocalRetargetTriggered
@@ -1186,7 +1302,9 @@ function buildContactPlan({
             ? "reuse-probe-plan-with-local-oam-feedback-retarget"
             : "reuse-probe-plan-with-local-repair"
         : "replan-new-topology-class",
-      topology_similarity_score: bestClass?.similarity.score ?? 1,
+      topology_similarity_score: bestClass?.similarity.structural_score ?? 1,
+      topology_legacy_composite_similarity_score: bestClass?.similarity.score ?? 1,
+      topology_dynamic_similarity_score: bestClass?.similarity.dynamic_score ?? 1,
       active_jaccard: bestClass?.similarity.active_jaccard ?? 1,
       inter_plane_jaccard: bestClass?.similarity.inter_plane_jaccard ?? 1,
       bottleneck_jaccard: bestClass?.similarity.bottleneck_jaccard ?? 1,
@@ -1227,7 +1345,7 @@ function buildContactPlan({
       adaptive_threshold_calibration_sample_support_credit: thresholdDetails.calibration_sample_support_credit,
       adaptive_threshold_calibration_evidence_confidence: thresholdDetails.calibration_evidence_confidence,
       adaptive_threshold_calibration_net_adjustment: thresholdDetails.calibration_net_adjustment,
-      topology_reuse_margin: round((bestClass?.similarity.score ?? 1) - adaptiveThreshold, 5),
+      topology_reuse_margin: round((bestClass?.similarity.structural_score ?? 1) - adaptiveThreshold, 5),
       ...topologyForecast,
       oam_feedback_pressure: oamFeedbackPressure.pressure,
       oam_replan_pressure: oamPressure.pressure,
@@ -1965,6 +2083,213 @@ function standardMetadataProfile({ enabled, hopMetadataBytes, reason }) {
   };
 }
 
+function unifiedCompactMetadataProfile({ hopMetadataBytes, compactHopMetadataBytes }) {
+  const effectiveBytes = round(clamp(compactHopMetadataBytes, 16, hopMetadataBytes));
+  return {
+    profile: "budget-compact",
+    observation_mode: "path-only",
+    effective_hop_metadata_bytes: effectiveBytes,
+    compression_ratio: round(effectiveBytes / Math.max(hopMetadataBytes, 1)),
+    policy: "unified-planner-compact-metadata",
+    reason: "selected-by-unit-cost-information-gain",
+  };
+}
+
+function topologyObjectSimilarityGroup({ type, id, row }) {
+  const plane = (nodeId) => String(nodeId ?? "").match(/^P(\d+)-/i)?.[1] ?? "unknown";
+  if (type === "node") return `node-plane:${plane(id)}`;
+  const sourcePlane = plane(row?.source);
+  const targetPlane = plane(row?.target);
+  return `link:${String(row?.kind ?? "unknown")}:${sourcePlane}:${targetPlane}`;
+}
+
+function unifiedPlannerObservationsForItem({ item, sliceIndex, linksBySliceAndId, metadataQuality = 1 }) {
+  const quality = clamp(metadataQuality, 0, 1);
+  const linkObservations = item.linkWeights.map((signal) => {
+    const row = linksBySliceAndId.get(`${sliceIndex}|${signal.link_id}`) ?? {};
+    return {
+      id: signal.link_id,
+      type: "link",
+      uncertainty: signal.uncertainty_score,
+      risk: signal.topology_risk_score,
+      metadata_quality: quality,
+      similarity_group: topologyObjectSimilarityGroup({ type: "link", id: signal.link_id, row }),
+    };
+  });
+  const nodeObservations = item.nodeStateSignals.map((signal) => ({
+    id: signal.node_id,
+    type: "node",
+    uncertainty: signal.uncertainty,
+    risk: signal.criticality,
+    metadata_quality: quality,
+    similarity_group: topologyObjectSimilarityGroup({ type: "node", id: signal.node_id }),
+  }));
+  return [...linkObservations, ...nodeObservations];
+}
+
+function addInstructionMaskCost(cost, { targetMaskBytes = 0, pathLinkCount = 0 } = {}) {
+  const maskBytes = Math.max(0, numberValue(targetMaskBytes));
+  if (maskBytes <= 0) return cost;
+  const forwardedMaskBytes = maskBytes * Math.max(0, numberValue(pathLinkCount));
+  const totalMaskBytes = maskBytes + forwardedMaskBytes;
+  return {
+    ...cost,
+    estimated_probe_base_bytes: round(numberValue(cost.estimated_probe_base_bytes) + maskBytes),
+    estimated_probe_forward_bytes: round(numberValue(cost.estimated_probe_forward_bytes) + forwardedMaskBytes),
+    estimated_generated_telemetry_bytes: round(numberValue(cost.estimated_generated_telemetry_bytes) + maskBytes),
+    estimated_total_telemetry_bytes: round(numberValue(cost.estimated_total_telemetry_bytes) + totalMaskBytes),
+  };
+}
+
+function buildUnifiedMetadataActions({
+  item,
+  itemIndex,
+  sliceIndex,
+  linksBySliceAndId,
+  hopMetadataBytes,
+  compactHopMetadataBytes,
+  probePacketBaseBytes,
+  reportHeaderBytes,
+  hopProcessingJ,
+  reportProcessingJ,
+  telemetryTxNjPerByte,
+  scaleBudgetEnabled,
+  allowedMetadataActions = new Set(["full", "compact", "selective"]),
+}) {
+  const mode = String(item.path.unified_planning_mode ?? "fresh");
+  const planningCost = mode === "reuse" ? 0.15 : mode === "repair" ? 0.55 : 1;
+  const group = `${mode}|${candidateIdentity(item.path)}`;
+  const actionBase = {
+    planning_mode: mode,
+    planning_cost: planningCost,
+    exclusion_group: group,
+    source_item_index: itemIndex,
+  };
+  const fullProfile = standardMetadataProfile({
+    enabled: true,
+    hopMetadataBytes,
+    reason: "unified-planner-full-metadata",
+  });
+  const compactProfile = unifiedCompactMetadataProfile({ hopMetadataBytes, compactHopMetadataBytes });
+  const costFor = (profile, perHopMetadataBytes = [], targetMaskBytes = 0) => addInstructionMaskCost(
+    estimatePathTelemetryCost({
+      pathLinks: item.pathLinks,
+      pathNodes: item.pathNodes,
+      hopMetadataBytes: profile.effective_hop_metadata_bytes,
+      perHopMetadataBytes,
+      probePacketBaseBytes,
+      reportHeaderBytes,
+      hopProcessingJ,
+      reportProcessingJ,
+      telemetryTxNjPerByte,
+    }),
+    { targetMaskBytes, pathLinkCount: item.pathLinks.length },
+  );
+  const actionBytes = (cost) => numberValue(
+    scaleBudgetEnabled ? cost.estimated_generated_telemetry_bytes : cost.estimated_total_telemetry_bytes,
+  );
+  const fullCost = costFor(fullProfile);
+  const compactCost = costFor(compactProfile);
+  const compactQuality = clamp(
+    0.55 + 0.35 * compactProfile.compression_ratio,
+    0.55,
+    0.9,
+  );
+  const actions = [
+    {
+      ...actionBase,
+      id: `${group}|full`,
+      metadata_action: "full",
+      metadata_profile: fullProfile,
+      telemetry_cost: fullCost,
+      telemetry_bytes: actionBytes(fullCost),
+      observations: unifiedPlannerObservationsForItem({
+        item,
+        sliceIndex,
+        linksBySliceAndId,
+        metadataQuality: 1,
+      }),
+    },
+    {
+      ...actionBase,
+      id: `${group}|compact`,
+      metadata_action: "compact",
+      metadata_profile: compactProfile,
+      telemetry_cost: compactCost,
+      telemetry_bytes: actionBytes(compactCost),
+      observations: unifiedPlannerObservationsForItem({
+        item,
+        sliceIndex,
+        linksBySliceAndId,
+        metadataQuality: compactQuality,
+      }),
+    },
+  ];
+
+  const allObservations = unifiedPlannerObservationsForItem({
+    item,
+    sliceIndex,
+    linksBySliceAndId,
+    metadataQuality: 1,
+  });
+  if (item.pathNodes.length >= 3 && allObservations.length > 1) {
+    const ranked = [...allObservations].sort((left, right) =>
+      numberValue(right.uncertainty) * (1 + numberValue(right.risk)) -
+        numberValue(left.uncertainty) * (1 + numberValue(left.risk)) ||
+      String(left.id).localeCompare(String(right.id))
+    );
+    const priorityValues = ranked.map((observation) =>
+      numberValue(observation.uncertainty) * (1 + numberValue(observation.risk))
+    );
+    const priorityThreshold = percentile(priorityValues, 0.5);
+    const selectedTargets = ranked.filter((observation, index) =>
+      index === 0 || numberValue(observation.uncertainty) * (1 + numberValue(observation.risk)) >= priorityThreshold
+    );
+    const nodeTargets = new Set(selectedTargets.filter((item) => item.type === "node").map((item) => item.id));
+    const linkTargets = new Set(selectedTargets.filter((item) => item.type === "link").map((item) => item.id));
+    const selectivePlan = buildPathMetadataPlan({
+      pathNodes: item.pathNodes,
+      pathLinks: item.pathLinks,
+      nodeTargets,
+      linkTargets,
+      preserveCoreNodeCoverage: false,
+      preserveCoreLinkMetrics: true,
+      preserveNonTargetLinks: false,
+    });
+    const selectiveProfile = {
+      profile: "unified-selective",
+      observation_mode: "path-only",
+      effective_hop_metadata_bytes: round(
+        selectivePlan.metadata_bytes / Math.max(item.pathNodes.length, 1),
+      ),
+      compression_ratio: round(
+        selectivePlan.metadata_bytes / Math.max(item.pathNodes.length * hopMetadataBytes, 1),
+      ),
+      policy: "unified-planner-selective-per-hop-metadata",
+      reason: "high-uncertainty-or-risk-objects-write-metadata-others-forward-only",
+    };
+    const perHopBytes = selectivePlan.hops.map((hop) => numberValue(hop.metadata_bytes));
+    const selectiveCost = costFor(selectiveProfile, perHopBytes, selectivePlan.target_mask_bytes);
+    const observedNodes = new Set(selectivePlan.observed_node_ids.map(String));
+    const observedLinks = new Set(selectivePlan.observed_link_ids.map(String));
+    actions.push({
+      ...actionBase,
+      id: `${group}|selective`,
+      metadata_action: "selective",
+      metadata_profile: selectiveProfile,
+      selective_metadata_plan: selectivePlan,
+      telemetry_cost: selectiveCost,
+      telemetry_bytes: actionBytes(selectiveCost),
+      observations: allObservations.filter((observation) =>
+        observation.type === "node"
+          ? observedNodes.has(observation.id)
+          : observedLinks.has(observation.id)
+      ),
+    });
+  }
+  return actions.filter((action) => allowedMetadataActions.has(action.metadata_action));
+}
+
 function compactMetadataProfile(profile) {
   return profile === "reuse-compact" || profile === "budget-compact";
 }
@@ -2034,6 +2359,9 @@ function enforceMetadataCompressionQuota({
   hopProcessingJ,
   reportProcessingJ,
   telemetryTxNjPerByte,
+  topologyVersionedObjectiveEnabled,
+  topologyVersionedObjectiveWeights,
+  topologyVersionedConfidenceThreshold,
 }) {
   const compactItems = selected.filter((item) => compactMetadataProfile(item.metadataProfile?.profile));
   if (!adaptiveMetadataProfileEnabled || compactItems.length === 0) return;
@@ -2350,7 +2678,7 @@ function normalizeSelectionStrategy(value) {
   return "int-mc-leverage";
 }
 
-function repairCandidatePath({ path, activeSet, graph, linksBySliceAndId }) {
+function repairCandidatePath({ path, activeSet, graph, linksBySliceAndId, requiredNodeIds = new Set() }) {
   const originalLinkIds = splitPath(path.link_ids);
   const originalNodes = splitPath(path.path);
   const source = path.source || originalNodes[0] || "";
@@ -2366,7 +2694,22 @@ function repairCandidatePath({ path, activeSet, graph, linksBySliceAndId }) {
     };
   }
 
-  const repaired = shortestPath(graph, source, sink);
+  const unifiedPlanningMode = String(path.unified_planning_mode ?? "");
+  if (
+    unifiedPlanningMode === "reuse" ||
+    unifiedPlanningMode === "fresh" ||
+    (unifiedPlanningMode === "repair" && boolValue(path.unified_fast_repair_no_reroute))
+  ) return null;
+
+  const targetPreservingRepair = buildTargetPreservingRepair({
+    graph,
+    source,
+    sink,
+    originalNodes,
+    requiredNodeIds,
+    shortestPath,
+  });
+  const repaired = targetPreservingRepair ?? shortestPath(graph, source, sink);
   if (!repaired || repaired.linkIds.length === 0) return null;
   const pathLinks = unique(repaired.linkIds);
   return {
@@ -2378,6 +2721,8 @@ function repairCandidatePath({ path, activeSet, graph, linksBySliceAndId }) {
     link_ids: repaired.linkIds.join(" > "),
     pathLinks,
     planning_repair_count: 1,
+    planning_target_preserving_repair: Boolean(targetPreservingRepair),
+    planning_preserved_importance_target_ids: targetPreservingRepair?.preservedTargetIds?.join(" > ") ?? "",
     predicted_path_risk: pathRisk({ sliceIndex: path.slice_index, linkIds: pathLinks, linksBySliceAndId }),
     original_unrepaired_path: path.path,
     original_unrepaired_link_ids: path.link_ids,
@@ -2398,6 +2743,25 @@ function activeLinkIdsForPath(path, activeSet) {
   return splitPath(path.link_ids).filter((linkId, index, list) => linkId && activeSet.has(linkId) && list.indexOf(linkId) === index);
 }
 
+function stablePathStructure({ path, activeSet, cache }) {
+  const cacheKey = `${path.path ?? ""}|${path.link_ids ?? ""}`;
+  const cached = cache?.get(cacheKey);
+  if (cached) {
+    return {
+      ...cached,
+      pathLinks: cached.pathLinks.filter((linkId) => activeSet.has(linkId)),
+      cacheHit: true,
+    };
+  }
+  const structure = {
+    cacheKey,
+    pathLinks: activeLinkIdsForPath(path, activeSet),
+    pathNodes: splitPath(path.path),
+  };
+  cache?.set(cacheKey, structure);
+  return { ...structure, cacheHit: false };
+}
+
 function buildSamplingMask({
   planningLinks,
   selectedRows,
@@ -2412,7 +2776,7 @@ function buildSamplingMask({
 }) {
   const selectedBySliceAndLink = new Map();
   selectedRows.forEach((row) => {
-    splitPath(row.link_ids).forEach((linkId) => {
+    splitPath(row.unified_observed_link_ids || row.link_ids).forEach((linkId) => {
       const key = `${row.slice_index}|${linkId}`;
       const old = selectedBySliceAndLink.get(key) ?? {
         probe_count: 0,
@@ -2460,6 +2824,8 @@ function buildSamplingMask({
         target: link.target,
         kind: link.kind,
         topology_class_id: slicePlan.topology_class_id ?? "",
+        topology_signature: slicePlan.topology_signature ?? "",
+        topology_version_id: slicePlan.topology_version_id ?? "",
         topology_forecast_horizon_slices: slicePlan.topology_forecast_horizon_slices ?? "",
         topology_forecast_stable_window_slices: slicePlan.topology_forecast_stable_window_slices ?? "",
         topology_forecast_next_major_drift_in_slices: slicePlan.topology_forecast_next_major_drift_in_slices ?? "",
@@ -2942,6 +3308,89 @@ function appendOamDeltaCandidates({ cachedRows, currentCandidates, slicePlan, ta
   return deltaRows.length > 0 ? [...cachedRows, ...deltaRows] : cachedRows;
 }
 
+function appendTopologyRepairDeltaCandidates({
+  cachedRows,
+  currentCandidates,
+  slicePlan,
+  targets,
+  changedLinkIds = [],
+  candidateBudget = cachedRows.length,
+}) {
+  if (cachedRows.length === 0 || currentCandidates.length === 0) return cachedRows;
+  const fixedCandidateBudget = Math.max(1, Math.floor(numberValue(candidateBudget, cachedRows.length)));
+  const changedLinkSet = new Set(changedLinkIds.map(String));
+  const affectedCachedPaths = cachedRows.filter((row) =>
+    splitPath(row.link_ids).some((linkId) => changedLinkSet.has(linkId))
+  ).length;
+  const mandatoryTargetCount = (targets?.links?.size ?? 0) + (targets?.nodes?.size ?? 0);
+  const replacementBudget = Math.max(1, Math.min(
+    32,
+    fixedCandidateBudget,
+    Math.max(
+      affectedCachedPaths,
+      Math.ceil(changedLinkIds.length / 4),
+      Math.ceil(mandatoryTargetCount / 4),
+    ),
+  ));
+  const cachedPathLengths = cachedRows
+    .map((row) => numberValue(row.path_link_count, splitPath(row.link_ids).length))
+    .filter((value) => value > 0);
+  const adaptiveRepairPathLimit = Math.max(
+    8,
+    Math.ceil(percentile(cachedPathLengths, 0.9) * 1.25),
+  );
+  const deltaCandidates = selectIncrementalRepairCandidates({
+    cachedCandidateIds: cachedRows.map(candidateIdentity),
+    currentCandidates: currentCandidates.map((path) => ({
+      id: candidateIdentity(path),
+      path,
+      link_ids: splitPath(path.link_ids),
+      node_ids: splitPath(path.path),
+    })),
+    changedLinkIds,
+    mandatoryLinkIds: [...(targets?.links ?? [])],
+    mandatoryNodeIds: [...(targets?.nodes ?? [])],
+    maximumPathLinks: adaptiveRepairPathLimit,
+    maximumDeltaCandidates: replacementBudget,
+  });
+  const retainedRows = cachedRows.slice(0, Math.max(0, fixedCandidateBudget - replacementBudget));
+  const selectedCandidates = [
+    ...retainedRows.map((row) => ({
+      id: candidateIdentity(row),
+      node_ids: splitPath(row.path),
+      link_ids: splitPath(row.link_ids),
+      row,
+    })),
+    ...deltaCandidates.map(({ id, path }) => ({
+      id,
+      node_ids: splitPath(path.path),
+      link_ids: splitPath(path.link_ids),
+      row: {
+        ...adaptCandidatePath(path, slicePlan, "topology-reuse-cache-local-delta"),
+        unified_budget_neutral_local_repair: true,
+        unified_fast_repair_no_reroute: true,
+        unified_adaptive_repair_path_limit: adaptiveRepairPathLimit,
+      },
+    })),
+  ];
+  const fallbackCandidates = currentCandidates.map((path) => ({
+    id: candidateIdentity(path),
+    node_ids: splitPath(path.path),
+    link_ids: splitPath(path.link_ids),
+    row: {
+      ...adaptCandidatePath(path, slicePlan, "topology-reuse-cache-representative-rotation"),
+      unified_budget_neutral_local_repair: true,
+      unified_fast_repair_no_reroute: true,
+    },
+  }));
+  const fixedBudgetRows = refillCandidatesToFixedBudget({
+    selectedCandidates,
+    fallbackCandidates,
+    candidateBudget: fixedCandidateBudget,
+  });
+  return fixedBudgetRows.map(({ row }) => row);
+}
+
 function sliceTrafficRiskPressure({ activeLinks, sliceIndex, linksBySliceAndId }) {
   const risks = activeLinks
     .map((linkId) => {
@@ -2994,6 +3443,55 @@ function nodeStateInformationForPath({ sliceIndex, pathNodes, nodesBySliceAndId 
   }, 0);
 }
 
+function nodeStateSignalsForPath({
+  sliceIndex,
+  slicePosition,
+  pathNodes,
+  nodesBySliceAndId,
+  selectedNodeLastSeen,
+  windowSize,
+}) {
+  return pathNodes.map((nodeId) => {
+    const node = nodesBySliceAndId?.get(`${sliceIndex}|${nodeId}`) ?? {};
+    const stale = slicePosition - (selectedNodeLastSeen?.get(nodeId) ?? -Infinity);
+    const age = !Number.isFinite(stale) ? 1 : clamp(stale / Math.max(windowSize, 1), 0, 1);
+    const queueDepth = numberValue(node.queue_depth, numberValue(node.queueDepth, 0));
+    const queuedTrafficMb = numberValue(node.queued_traffic_mb, 0);
+    const cpu = numberValue(node.cpu_percent, numberValue(node.cpuLoadPercent, 0));
+    const energy = numberValue(node.energy_percent, numberValue(node.batteryPercent, 100));
+    const warning = String(node.mode || node.mode_estimate || "").toLowerCase() === "warning" ? 1 : 0;
+    const criticality = clamp(
+      clamp(queueDepth / 100, 0, 1) * 0.32 +
+        clamp(queuedTrafficMb / 5000, 0, 1) * 0.22 +
+        clamp(cpu / 100, 0, 1) * 0.18 +
+        clamp((35 - energy) / 35, 0, 1) * 0.16 +
+        warning * 0.12,
+      0,
+      1,
+    );
+    const confidence = clamp(numberValue(node.confidence, numberValue(node.planner_state_confidence, 0.5)), 0, 1);
+    const reportedAge = clamp(numberValue(node.state_age_slices) / Math.max(windowSize, 1), 0, 1);
+    const effectiveAge = Math.max(age, reportedAge);
+    const conflict = clamp(numberValue(node.conflict_severity, numberValue(node.oam_conflict_severity)), 0, 1);
+    const uncertainty = clamp(
+      effectiveAge * 0.4 +
+        (1 - confidence) * 0.25 +
+        conflict * 0.15 +
+        criticality * 0.2,
+      0,
+      1,
+    );
+    return {
+      node_id: nodeId,
+      uncertainty: round(uncertainty),
+      criticality: round(criticality),
+      age: round(effectiveAge),
+      prediction_variance: round(1 - confidence),
+      report_conflict: round(conflict),
+    };
+  });
+}
+
 function nodeCountForSlice({ sliceIndex, nodesBySliceAndId }) {
   if (!nodesBySliceAndId) return 1;
   let nodeCount = 0;
@@ -3004,21 +3502,111 @@ function nodeCountForSlice({ sliceIndex, nodesBySliceAndId }) {
   return Math.max(nodeCount, 1);
 }
 
+function rowsForSlice({ sliceIndex, rowsBySliceAndId }) {
+  if (!rowsBySliceAndId) return [];
+  const rows = [];
+  const prefix = `${sliceIndex}|`;
+  for (const [key, row] of rowsBySliceAndId.entries()) {
+    if (String(key).startsWith(prefix)) rows.push(row);
+  }
+  return rows;
+}
+
 function nodeStateSamplingScale({ sliceIndex, nodesBySliceAndId }) {
   const nodeCount = nodeCountForSlice({ sliceIndex, nodesBySliceAndId });
   if (nodeCount <= 96) return 1;
   return round(1 + clamp(Math.log2(nodeCount / 96) / 5, 0, 0.55));
 }
 
+function importanceTargetKey(target) {
+  return `${target.target_type}|${target.target_id}`;
+}
+
+function importanceGainForCandidate({
+  pathNodes,
+  pathLinks,
+  targets = [],
+  coveredTargetKeys = new Set(),
+  probePacketBaseBytes = 64,
+  reportHeaderBytes = 128,
+  maxAoIDebtSeverity = 0,
+  includeAdjacentLinkTargets = false,
+}) {
+  const nodeIds = new Set(pathNodes);
+  const linkIds = new Set(pathLinks);
+  const hits = targets.filter((target) => {
+    if (coveredTargetKeys.has(importanceTargetKey(target))) return false;
+    return target.target_type === "node"
+      ? nodeIds.has(String(target.target_id))
+      : linkIds.has(String(target.target_id)) || includeAdjacentLinkTargets && (
+        nodeIds.has(String(target.source ?? "")) || nodeIds.has(String(target.target ?? ""))
+      );
+  });
+  const nodeTargets = new Set(targets
+    .filter((target) => target.target_type === "node")
+    .filter((target) => !boolValue(target.coverage_required) || boolValue(target.mandatory))
+    .map((target) => String(target.target_id)));
+  const linkTargets = new Set(targets.filter((target) => target.target_type === "link").map((target) => String(target.target_id)));
+  const metadataPlan = buildPathMetadataPlan({
+    pathNodes,
+    pathLinks,
+    nodeTargets,
+    linkTargets,
+    preserveCoreNodeCoverage: true,
+    preserveCoreLinkMetrics: true,
+  });
+  const informationGain = hits.reduce(
+    (sum, target) => sum + numberValue(target.importance_score) + (boolValue(target.mandatory) ? 1 : 0),
+    0,
+  );
+  const aoiDebtHits = hits.filter(
+    (target) => boolValue(target.coverage_required) || numberValue(target.age_score) >= 1,
+  );
+  const adjacentLinkHits = hits.filter((target) =>
+    target.target_type === "link" &&
+    !linkIds.has(String(target.target_id)) &&
+    (nodeIds.has(String(target.source ?? "")) || nodeIds.has(String(target.target ?? "")))
+  );
+  const adjacentLinkMetadataBytes = adjacentLinkHits.length * 48;
+  const actualGeneratedBytes = probePacketBaseBytes + reportHeaderBytes + metadataPlan.target_mask_bytes +
+    (metadataPlan.metadata_bytes + adjacentLinkMetadataBytes) * 2;
+  return {
+    target_ids: hits.map(importanceTargetKey),
+    target_count: hits.length,
+    mandatory_target_count: hits.filter((target) => boolValue(target.mandatory)).length,
+    aoi_debt_target_ids: aoiDebtHits.map(importanceTargetKey),
+    aoi_debt_target_count: aoiDebtHits.length,
+    aoi_debt_severity: round(aoiDebtHits
+      .reduce((sum, target) => sum + numberValue(target.aoi_debt_severity, 1), 0)),
+    aoi_debt_max_severity: round(Math.max(
+      0,
+      ...aoiDebtHits.map((target) => numberValue(target.aoi_debt_severity, 1)),
+    )),
+    aoi_debt_oldest_target_count: aoiDebtHits.filter(
+      (target) => numberValue(target.aoi_debt_severity, 1) >= maxAoIDebtSeverity - 1e-6,
+    ).length,
+    adjacent_link_target_ids: adjacentLinkHits.map(importanceTargetKey),
+    adjacent_link_target_count: adjacentLinkHits.length,
+    adjacent_link_metadata_bytes: adjacentLinkMetadataBytes,
+    information_gain: round(informationGain),
+    actual_generated_bytes: round(actualGeneratedBytes),
+    gain_per_kb: round(informationGain / Math.max(actualGeneratedBytes / 1024, 1 / 1024)),
+  };
+}
+
 function selectSlicePaths({
   slicePosition,
   slicePlan,
   candidatePaths,
+  unifiedStablePathCache = null,
+  unifiedRepairFallbackCandidates = [],
+  unifiedRepairCandidateBudget = 0,
   linksBySliceAndId,
   nodesBySliceAndId,
   leverageScores,
   forecastBySliceAndLink,
   selectedLastSeen,
+  selectedNodeLastSeen,
   algorithm,
   samplingRate,
   targetActiveLinkSamplingRate,
@@ -3055,6 +3643,20 @@ function selectSlicePaths({
   hopProcessingJ,
   reportProcessingJ,
   telemetryTxNjPerByte,
+  scaleAdaptiveTotalBudgetEnabled = false,
+  scaleBudgetHeadroomRatio = 0.1,
+  scaleBudgetPathHeadroomRatio = 0.25,
+  scaleBudgetExplicitSource = "explicit-hard-cap",
+  importancePathScoringEnabled = false,
+  importanceTargets = [],
+  importanceScoreWeight = 0.12,
+  importanceShadowInformationFloor = 1,
+  importanceAoIShadowInformationFloor = 1,
+  importanceAoIDebtPathRatio = 0.1,
+  importanceRepairByteBudgetRatio = 0.15,
+  importanceBudgetNeutralReplacementEnabled = false,
+  importanceReplacementRatio = 0.25,
+  importanceReplacementMaxBaseLossRatio = 0.02,
 }) {
   if (candidatePaths.length === 0) return { rows: [], summary: null };
   const activeLinks = [...slicePlan.activeSet];
@@ -3094,6 +3696,32 @@ function selectSlicePaths({
     sliceIndex: slicePlan.slice_index,
     nodesBySliceAndId,
   });
+  const scaleBudgetEnabled = Boolean(scaleAdaptiveTotalBudgetEnabled) && selectionStrategy !== "full-int";
+  const scaleBudget = scaleBudgetEnabled
+    ? buildScaleAdaptiveTelemetryBudget({
+        nodes: rowsForSlice({
+          sliceIndex: slicePlan.slice_index,
+          rowsBySliceAndId: nodesBySliceAndId,
+        }),
+        activeLinks: activeLinks
+          .map((linkId) => linksBySliceAndId.get(`${slicePlan.slice_index}|${linkId}`))
+          .filter(Boolean),
+        candidatePaths,
+        samplingRate,
+        targetActiveLinkSamplingRate,
+        legacyPathFloor: maxPaths > 0 ? maxPaths : 12,
+        explicitByteBudget: telemetryByteBudgetPerSlice,
+        explicitBudgetSource: scaleBudgetExplicitSource,
+        hopMetadataBytes,
+        probePacketBaseBytes,
+        reportHeaderBytes,
+        budgetHeadroomRatio: scaleBudgetHeadroomRatio,
+        pathHeadroomRatio: scaleBudgetPathHeadroomRatio,
+      })
+    : null;
+  const scaleAwareMaxPaths = scaleBudgetEnabled
+    ? scaleBudget.safe_path_cap
+    : maxPaths;
   const adaptiveProbeBudget = buildAdaptiveProbeBudget({
     enabled: adaptiveProbeBudgetEnabled,
     slicePlan,
@@ -3104,7 +3732,7 @@ function selectSlicePaths({
     targetActiveLinkSamplingRate: topologyBoostedTargetActiveLinkSamplingRate,
     telemetryByteBudgetPerSlice: oamBudget.adjusted_telemetry_byte_budget_per_slice,
     minPaths,
-    maxPaths,
+    maxPaths: scaleAwareMaxPaths,
     candidatePathCount: candidatePaths.length,
     sliceTrafficRisk,
     nodeSamplingScale,
@@ -3112,7 +3740,7 @@ function selectSlicePaths({
   const multiObjectiveControl = buildMultiObjectiveBudgetControl({
     enabled: multiObjectiveBudgetEnabled && adaptiveProbeBudgetEnabled,
     nodeCount,
-    configuredMaxPathsPerSlice: maxPaths > 0 ? maxPaths : candidatePaths.length,
+    configuredMaxPathsPerSlice: scaleAwareMaxPaths > 0 ? scaleAwareMaxPaths : candidatePaths.length,
     baseScale: adaptiveProbeBudget.adaptive_probe_budget_scale,
     nodeSamplingScale,
     sliceTrafficRisk,
@@ -3146,15 +3774,21 @@ function selectSlicePaths({
         adaptiveProbeBudget.adjusted_target_active_link_sampling_rate,
       )
     : adaptiveProbeBudget.adjusted_target_active_link_sampling_rate;
-  const planningTelemetryByteBudgetPerSlice = adaptiveProbeBudget.adjusted_telemetry_byte_budget_per_slice;
-  const baseTargetCoveredLinks = Math.ceil(activeLinks.length * planningTargetActiveLinkSamplingRate);
-  const basePathCount = Math.ceil(candidatePaths.length * planningSamplingRate);
+  const planningTelemetryByteBudgetPerSlice = scaleBudgetEnabled
+    ? scaleBudget.byte_budget
+    : adaptiveProbeBudget.adjusted_telemetry_byte_budget_per_slice;
+  const baseTargetCoveredLinks = scaleBudgetEnabled
+    ? scaleBudget.target_active_link_count
+    : Math.ceil(activeLinks.length * planningTargetActiveLinkSamplingRate);
+  const basePathCount = scaleBudgetEnabled
+    ? scaleBudget.witness_path_count
+    : Math.ceil(candidatePaths.length * planningSamplingRate);
   const baseRequestedPathCount = selectionStrategy === "full-int"
     ? candidatePaths.length
     : Math.max(minPaths, basePathCount);
   const configuredSelectedLimit = selectionStrategy === "full-int"
     ? candidatePaths.length
-    : Math.min(maxPaths > 0 ? maxPaths : candidatePaths.length, candidatePaths.length);
+    : Math.min(scaleAwareMaxPaths > 0 ? scaleAwareMaxPaths : candidatePaths.length, candidatePaths.length);
   const baseSelectedLimit = Math.min(
     candidatePaths.length,
     numberValue(adaptiveProbeBudget.adaptive_probe_budget_effective_max_paths_per_slice, configuredSelectedLimit),
@@ -3162,16 +3796,82 @@ function selectSlicePaths({
   const selectedLimitAfterMultiObjective = multiObjectiveControl.enabled && multiObjectiveScale < 1
     ? Math.max(minPaths, Math.min(baseSelectedLimit, numberValue(multiObjectiveControl.effective_max_paths_per_slice, baseSelectedLimit)))
     : baseSelectedLimit;
-  const planningCandidates = candidatePaths
-    .map((path) => repairCandidatePath({ path, activeSet, graph, linksBySliceAndId }))
+  // Base-path repair must be identical to the enhanced baseline. Importance
+  // targets are only allowed to add paths after the base selector finishes.
+  const requiredImportanceNodeIds = new Set();
+  let planningCandidates = candidatePaths
+    .map((path) => repairCandidatePath({
+      path,
+      activeSet,
+      graph,
+      linksBySliceAndId,
+      requiredNodeIds: requiredImportanceNodeIds,
+    }))
     .filter(Boolean);
+  let unifiedRepairRefillPaths = 0;
+  const repairModeSelected = splitPath(slicePlan.unified_mode_prefilter_selected_modes).includes("repair");
+  if (
+    topologyVersionedRiskPlannerEnabled &&
+    repairModeSelected &&
+    unifiedRepairCandidateBudget > 0 &&
+    planningCandidates.length < unifiedRepairCandidateBudget
+  ) {
+    const fallbackCandidates = unifiedRepairFallbackCandidates
+      .map((path) => ({
+        id: candidateIdentity(path),
+        node_ids: splitPath(path.path),
+        link_ids: activeLinkIdsForPath(path, activeSet),
+        path,
+      }))
+      .filter((candidate) =>
+        candidate.link_ids.length > 0 &&
+        candidate.node_ids.length > 1 &&
+        splitPath(candidate.path.link_ids).every((linkId) => activeSet.has(linkId))
+      );
+    const refilled = refillCandidatesToFixedBudget({
+      selectedCandidates: planningCandidates.map((path) => ({
+        id: candidateIdentity(path),
+        node_ids: splitPath(path.path),
+        link_ids: activeLinkIdsForPath(path, activeSet),
+        path,
+      })),
+      fallbackCandidates,
+      candidateBudget: unifiedRepairCandidateBudget,
+    });
+    unifiedRepairRefillPaths = Math.max(0, refilled.length - planningCandidates.length);
+    planningCandidates = refilled.map((candidate) => candidate.path);
+  }
+  const importanceMaxAoIDebtSeverity = Math.max(
+    0,
+    ...importanceTargets
+      .filter((target) => boolValue(target.coverage_required) || numberValue(target.age_score) >= 1)
+      .map((target) => numberValue(target.aoi_debt_severity, 1)),
+  );
+  const importanceOldestTargetCount = importanceTargets.filter(
+    (target) => (boolValue(target.coverage_required) || numberValue(target.age_score) >= 1) &&
+      numberValue(target.aoi_debt_severity, 1) >= importanceMaxAoIDebtSeverity - 1e-6,
+  ).length;
+  let unifiedStablePathCacheHits = 0;
+  let unifiedStablePathCacheMisses = 0;
   const scored = planningCandidates.map((path, index) => {
-    const pathLinks = activeLinkIdsForPath(path, activeSet);
-    const pathNodes = splitPath(path.path);
+    const itemCandidateSource = path.reused_candidate_source || candidateSource;
+    const stableStructure = stablePathStructure({ path, activeSet, cache: unifiedStablePathCache });
+    const pathLinks = stableStructure.pathLinks;
+    const pathNodes = stableStructure.pathNodes;
+    if (stableStructure.cacheHit) unifiedStablePathCacheHits += 1;
+    else unifiedStablePathCacheMisses += 1;
     const nodeStateInformationGain = nodeStateInformationForPath({
       sliceIndex: path.slice_index,
       pathNodes,
       nodesBySliceAndId,
+    });
+    const nodeStateSignals = nodeStateSignalsForPath({
+      sliceIndex: path.slice_index,
+      slicePosition,
+      pathNodes,
+      nodesBySliceAndId,
+      selectedNodeLastSeen,
+      windowSize,
     });
     const forecastProfile = pathForecastProfile({
       sliceIndex: path.slice_index,
@@ -3190,10 +3890,33 @@ function selectSlicePaths({
         numberValue(forecast.forecast_transition_score) * 0.15 +
         numberValue(forecast.forecast_near_outage_score) * 0.18;
       const stale = slicePosition - (selectedLastSeen.get(linkId) ?? -Infinity);
-      const staleBonus = !Number.isFinite(stale) || stale > windowSize ? 0.75 : Math.max(0, stale / Math.max(windowSize, 1)) * 0.35;
+      const ageScore = !Number.isFinite(stale)
+        ? 1
+        : clamp(stale / Math.max(windowSize, 1), 0, 1);
+      const staleBonus = !Number.isFinite(stale) || stale > windowSize ? 0.75 : ageScore * 0.35;
       const uncertaintyBonus =
         numberValue(score.temporal_variance) * 0.45 +
-        (1 - linkAvailability(row ?? {})) * 0.22;
+          (1 - linkAvailability(row ?? {})) * 0.22;
+      const plannerConfidence = clamp(numberValue(row?.planner_state_confidence, row?.confidence ?? 0.5), 0, 1);
+      const reportedAgeScore = clamp(numberValue(row?.state_age_slices) / Math.max(windowSize, 1), 0, 1);
+      const conflictScore = clamp(numberValue(row?.conflict_severity, row?.oam_conflict_severity), 0, 1);
+      const uncertaintyScore = clamp(
+        clamp(numberValue(score.temporal_variance) * 4, 0, 1) * 0.28 +
+          Math.max(ageScore, reportedAgeScore) * 0.3 +
+          clamp(numberValue(score.low_rank_leverage ?? score.leverage, 1) / 3, 0, 1) * 0.15 +
+          (1 - plannerConfidence) * 0.17 +
+          conflictScore * 0.1,
+        0,
+        1,
+      );
+      const topologyRiskScore = clamp(
+        numberValue(forecast.forecast_priority_score) * 0.35 +
+          numberValue(forecast.forecast_transition_score) * 0.2 +
+          numberValue(forecast.forecast_near_outage_score) * 0.3 +
+          numberValue(forecast.forecast_contact_scarcity_score) * 0.15,
+        0,
+        1,
+      );
       const weight =
         numberValue(score.low_rank_leverage ?? score.leverage, 1) +
         numberValue(score.transition_rate) * 0.8 +
@@ -3209,6 +3932,11 @@ function selectSlicePaths({
         transition_rate: round(numberValue(score.transition_rate)),
         temporal_variance: round(numberValue(score.temporal_variance)),
         forecast_priority_score: forecast.forecast_priority_score,
+        uncertainty_score: round(uncertaintyScore),
+        topology_risk_score: round(topologyRiskScore),
+        age_score: round(ageScore),
+        prediction_variance_score: round(1 - plannerConfidence),
+        report_conflict_score: round(conflictScore),
       };
     });
     const linkScores = linkWeights.map((item) => numberValue(item.weight));
@@ -3226,7 +3954,7 @@ function selectSlicePaths({
       minEnergyPercent,
     });
     const energyRisk = energyProfile.risk;
-    const reuseBonus = candidateSource === "topology-reuse-cache" ? 0.15 : 0;
+    const reuseBonus = itemCandidateSource === "topology-reuse-cache" ? 0.15 : 0;
     const interPlaneLinks = pathLinks.filter((linkId) => linksBySliceAndId.get(`${path.slice_index}|${linkId}`)?.kind === "inter-plane").length;
     const bottleneckLinks = pathLinks.filter((linkId) => {
       const row = linksBySliceAndId.get(`${path.slice_index}|${linkId}`);
@@ -3260,13 +3988,13 @@ function selectSlicePaths({
       forecastProfile,
       oamFeedback,
       oamControl,
-      candidateSource,
+      candidateSource: itemCandidateSource,
     });
     const metadataProfile = adaptiveMetadataProfile({
       enabled: adaptiveMetadataProfileEnabled,
       hopMetadataBytes,
       compactHopMetadataBytes,
-      candidateSource,
+      candidateSource: itemCandidateSource,
       slicePlan,
       adaptiveProbeBudget,
       oamFeedback,
@@ -3395,11 +4123,22 @@ function selectSlicePaths({
     const rankingScore = costAwareSampling && !["full-int", "random-sampling"].includes(selectionStrategy)
         ? costScore.cost_aware_score
         : strategyScore;
+    const importanceGain = importanceGainForCandidate({
+      pathNodes,
+      pathLinks,
+      targets: importanceTargets,
+      probePacketBaseBytes,
+      reportHeaderBytes,
+      maxAoIDebtSeverity: importanceMaxAoIDebtSeverity,
+      includeAdjacentLinkTargets: true,
+    });
     return {
       path,
       index,
       pathLinks,
+      pathNodes,
       pathNodeCount: pathNodes.length,
+      nodeStateSignals,
       energyRisk,
       energyProfile,
       localAdaptive,
@@ -3411,14 +4150,98 @@ function selectSlicePaths({
       multiObjectiveScore,
       linkWeights,
       rankingScore,
+      importanceGain,
       oamFeedback,
       oamControl,
       score: strategyScore,
       base_int_mc_score: baseScore,
       node_state_information_gain: round(nodeStateInformationGain),
       base_information_gain: round(baseInformationGain),
+      candidateSource: itemCandidateSource,
     };
   });
+
+  const importanceEfficiencyReference = Math.max(
+    1e-9,
+    ...scored.map((item) => numberValue(item.importanceGain?.gain_per_kb)),
+  );
+  const importanceAoIDebtReference = Math.max(
+    1,
+    ...scored.map((item) => numberValue(item.importanceGain?.aoi_debt_severity)),
+  );
+  const importanceAoIDebtMaxReference = Math.max(
+    1,
+    ...scored.map((item) => numberValue(item.importanceGain?.aoi_debt_max_severity)),
+  );
+  const importanceOldestTargetsPerPath = Math.max(
+    1,
+    ...scored.map((item) => numberValue(item.importanceGain?.aoi_debt_oldest_target_count)),
+  );
+
+  const objectiveCostReferences = {
+    bytes: Math.max(
+      1,
+      mean(scored.map((item) => numberValue(item.rankingTelemetryCost?.estimated_total_telemetry_bytes, NaN)).filter(Number.isFinite)),
+    ),
+    energyJ: Math.max(
+      1e-6,
+      mean(scored.map((item) => numberValue(item.rankingTelemetryCost?.estimated_total_telemetry_energy_j, NaN)).filter(Number.isFinite)),
+    ),
+  };
+  if (topologyVersionedObjectiveEnabled && selectionStrategy === "int-mc-leverage") {
+    scored.forEach((item) => {
+      const objective = evaluateTopologyVersionedPathObjective({
+        enabled: true,
+        topologyClassId: slicePlan.topology_class_id,
+        topologySignature: slicePlan.topology_signature,
+        candidateSource: item.candidateSource,
+        planningRepairCount: item.path.planning_repair_count,
+        activeLinkCount: activeLinks.length,
+        linkSignals: item.linkWeights.map((signal) => ({
+          link_id: signal.link_id,
+          uncertainty: signal.uncertainty_score,
+          topology_risk: signal.topology_risk_score,
+          age: signal.age_score,
+          covered: false,
+        })),
+        nodeSignals: item.nodeStateSignals.map((signal) => ({ ...signal, covered: false })),
+        telemetryCost: item.rankingTelemetryCost ?? item.telemetryCost,
+        costReferences: objectiveCostReferences,
+        nodeInformationGain: item.node_state_information_gain,
+        oamTargetScore: numberValue(item.oamFeedback?.score) + numberValue(item.oamControl?.score),
+        metadataProfile: item.metadataProfile?.profile,
+        baselineRankingScore: item.rankingScore,
+        weights: topologyVersionedObjectiveWeights,
+        confidenceThreshold: topologyVersionedConfidenceThreshold,
+      });
+      item.topologyVersionedObjective = objective;
+      item.rankingScore = objective.ranking_score;
+    });
+  }
+  const importanceScoreScale = Math.max(
+    0.1,
+    percentile(scored.map((item) => numberValue(item.rankingScore)), 0.9) -
+      percentile(scored.map((item) => numberValue(item.rankingScore)), 0.1),
+  );
+  if (importancePathScoringEnabled && selectionStrategy === "int-mc-leverage") {
+    scored.forEach((item) => {
+      item.importanceNormalizedGain = clamp(
+        numberValue(item.importanceGain?.gain_per_kb) / importanceEfficiencyReference,
+        0,
+        1,
+      );
+      item.importanceScoreBonus = round(importanceScoreWeight * importanceScoreScale * item.importanceNormalizedGain);
+      item.importanceAoIDebtScoreBonus = round(
+        importanceScoreScale * 1.5 * (
+          0.8 * numberValue(item.importanceGain?.aoi_debt_max_severity) / importanceAoIDebtMaxReference +
+          0.1 * numberValue(item.importanceGain?.aoi_debt_severity) / importanceAoIDebtReference +
+          0.1 * numberValue(item.importanceGain?.aoi_debt_oldest_target_count) / importanceOldestTargetsPerPath
+        ),
+      );
+      // The deployable policy preserves the representative base ranking. Importance
+      // targets are handled by the bounded additive repair phase below.
+    });
+  }
 
   scored.sort((left, right) =>
     selectionStrategy === "full-int"
@@ -3427,7 +4250,9 @@ function selectSlicePaths({
   );
   const selected = [];
   const covered = new Set();
+  const coveredNodes = new Set();
   const coveredMandatoryOamTargets = new Set();
+  const coveredImportanceTargets = new Set();
   let energyGuardSuppressedPaths = 0;
   const energyBudget = buildEnergyAwareSamplingBudget({
     scored,
@@ -3448,17 +4273,157 @@ function selectSlicePaths({
   const targetCoveredLinks = energyBudget.energy_budget_target_covered_links;
   const requestedPathCount = energyBudget.energy_budget_requested_paths;
   const selectedLimit = energyBudget.energy_budget_selected_limit;
+  const importanceAoIDebtPathLimit = importancePathScoringEnabled && !importanceBudgetNeutralReplacementEnabled
+    ? Math.min(
+        selectedLimit,
+        Math.max(
+          1,
+          Math.ceil(requestedPathCount * importanceAoIDebtPathRatio),
+          Math.ceil(importanceOldestTargetCount / importanceOldestTargetsPerPath),
+        ),
+      )
+    : 0;
+  let importanceAoIDebtPromotedPaths = 0;
+  const importanceAdjustedRequestedPathCount = importanceBudgetNeutralReplacementEnabled
+    ? requestedPathCount
+    : computeAoIAdjustedPathCount({
+        requestedPathCount,
+        aoiRepairPathLimit: importanceAoIDebtPathLimit,
+        selectedLimit,
+      });
   const telemetryBudgetEnabled = costAwareSampling && selectionStrategy !== "full-int" && planningTelemetryByteBudgetPerSlice > 0;
   let telemetryBudgetUsedBytes = 0;
   let telemetryBudgetSuppressedPaths = 0;
   let telemetryBudgetOverridePaths = 0;
   let reuseDuplicateSuppressedPaths = 0;
   let oamDuplicateTargetOnlySuppressedPaths = 0;
+  let unifiedPlannerDecision = null;
 
+  if (topologyVersionedRiskPlannerEnabled && selectionStrategy === "int-mc-leverage") {
+    if (!telemetryBudgetEnabled) {
+      throw new Error("topology-versioned-risk-int requires a positive telemetry byte budget");
+    }
+    const candidateActions = scored
+      .map((item, itemIndex) => ({ item, itemIndex }))
+      .filter(({ item }) =>
+        item.energyRisk < energyGuardThreshold ||
+        numberValue(item.localAdaptive?.risk) >= 0.6
+      )
+      .flatMap(({ item, itemIndex }) => buildUnifiedMetadataActions({
+        item,
+        itemIndex,
+        sliceIndex: slicePlan.slice_index,
+        linksBySliceAndId,
+        hopMetadataBytes,
+        compactHopMetadataBytes,
+        probePacketBaseBytes,
+        reportHeaderBytes,
+        hopProcessingJ,
+        reportProcessingJ,
+        telemetryTxNjPerByte,
+        scaleBudgetEnabled,
+        allowedMetadataActions: topologyVersionedMetadataActions,
+      }));
+    if (topologyVersionedInformationGainMode === "coverage-only") {
+      candidateActions.forEach((action) => {
+        action.observations = action.observations.map((observation) => ({
+          ...observation,
+          uncertainty: 1,
+          similarity_group: "",
+        }));
+      });
+    }
+    const candidatesByMode = Object.groupBy(
+      candidateActions,
+      (action) => action.planning_mode,
+    );
+    const topologyVersion = buildTopologyVersion({
+      topologyClassId: slicePlan.topology_class_id,
+      topologySignature: slicePlan.topology_signature,
+      addedLinkIds: splitPath(slicePlan.unified_topology_added_link_ids),
+      removedLinkIds: splitPath(slicePlan.unified_topology_removed_link_ids),
+      nextChangeInSlices: optionalNumber(slicePlan.topology_forecast_next_major_drift_in_slices),
+    });
+    unifiedPlannerDecision = chooseTopologyVersionedPlan({
+      topologyVersion,
+      candidatesByMode,
+      byteBudget: planningTelemetryByteBudgetPerSlice,
+      riskWeight: topologyVersionedRiskWeight,
+      redundancyWeight: topologyVersionedInformationGainMode === "coverage-only"
+        ? 0
+        : topologyVersionedRedundancyWeight,
+      planningCostWeight: topologyVersionedPlanningCostWeight,
+      selectionEngineByMode: {
+        reuse: "cached-plan-greedy",
+        repair: "cached-plan-greedy",
+        fresh: "lazy-greedy",
+      },
+    });
+    telemetryBudgetUsedBytes = unifiedPlannerDecision.used_bytes;
+    unifiedPlannerDecision.selected_actions.forEach((action) => {
+      const sourceItem = scored[numberValue(action.source_item_index, -1)];
+      if (!sourceItem) return;
+      const item = {
+        ...sourceItem,
+        path: {
+          ...sourceItem.path,
+          unified_planning_mode: action.planning_mode,
+        },
+        metadataProfile: action.metadata_profile,
+        telemetryCost: action.telemetry_cost,
+        unifiedSelectiveMetadataPlan: action.selective_metadata_plan ?? null,
+        unifiedPlannerAction: action,
+      };
+      const observedLinkIds = new Set(
+        action.observations.filter((observation) => observation.type === "link").map((observation) => observation.id),
+      );
+      const observedNodeIds = new Set(
+        action.observations.filter((observation) => observation.type === "node").map((observation) => observation.id),
+      );
+      const newLinkIds = [...observedLinkIds].filter((linkId) => !covered.has(linkId));
+      const marginal = {
+        information_gain: action.marginal_information_gain,
+        base_information_gain: sourceItem.base_information_gain,
+        redundancy_penalty: action.marginal_redundancy_penalty,
+        novelty_ratio: round(
+          (newLinkIds.length + [...observedNodeIds].filter((nodeId) => !coveredNodes.has(nodeId)).length) /
+            Math.max(observedLinkIds.size + observedNodeIds.size, 1),
+        ),
+        new_link_count: newLinkIds.length,
+        marginal_link_gains: newLinkIds.join(" > "),
+      };
+      item.selectedMarginal = marginal;
+      item.selectedCostScore = costAwarePathScore({
+        score: sourceItem.score,
+        informationGain: action.marginal_value,
+        cost: action.telemetry_cost,
+        forecastProfile: sourceItem.forecastProfile,
+        diversity: marginal.novelty_ratio,
+        oamFeedback: sourceItem.oamFeedback,
+        oamControl: sourceItem.oamControl,
+        weight: costAwarenessWeight,
+      });
+      item.selectedMultiObjectiveScore = sourceItem.multiObjectiveScore;
+      item.selectedTopologyVersionedObjective = sourceItem.topologyVersionedObjective;
+      item.selectedLegacyShadowGuardDecision = "unified-planner-selected-under-hard-budget";
+      item.telemetryBudgetDecision = "unified-hard-budget-without-override";
+      item.telemetryBudgetUsedBytesAfterSelection = action.budget_used_bytes_after_selection;
+      item.telemetryBudgetRemainingBytesAfterSelection = action.budget_remaining_bytes_after_selection;
+      item.selectedNewMandatoryTargetIds = uncoveredMandatoryOamTargetIds(item, coveredMandatoryOamTargets);
+      item.selectedImportanceGain = item.importanceGain;
+      item.selectedImportanceNormalizedGain = item.importanceNormalizedGain ?? 0;
+      item.selectedImportanceScoreBonus = 0;
+      item.selectedImportanceAoIDebtScoreBonus = 0;
+      selected.push(item);
+      observedLinkIds.forEach((linkId) => covered.add(linkId));
+      observedNodeIds.forEach((nodeId) => coveredNodes.add(nodeId));
+      mandatoryOamTargetIds(item).forEach((targetId) => coveredMandatoryOamTargets.add(targetId));
+    });
+  } else {
   const pending = [...scored];
   while (pending.length > 0 && selected.length < selectedLimit) {
     let item;
-    if (selectionStrategy === "int-mc-leverage") {
+    if (!item && selectionStrategy === "int-mc-leverage") {
       const windowSize = Math.min(
         pending.length,
         Math.max(64, Math.min(512, Math.ceil(Math.max(requestedPathCount, minPaths) * 1.5))),
@@ -3466,6 +4431,9 @@ function selectSlicePaths({
       let bestIndex = 0;
       let bestRankingScore = -Infinity;
       let bestMarginalGain = -Infinity;
+      let legacyBestIndex = 0;
+      let legacyBestRankingScore = -Infinity;
+      let legacyBestMarginalGain = -Infinity;
       for (let index = 0; index < windowSize; index += 1) {
         const candidate = pending[index];
         const marginal = marginalInformationForPath({
@@ -3495,14 +4463,67 @@ function selectSlicePaths({
         candidate.currentMarginal = marginal;
         candidate.currentCostScore = currentCostScore;
         candidate.currentMultiObjectiveScore = currentMultiObjectiveScore;
+        const baselineGreedyScore = costAwareSampling
+          ? currentCostScore.cost_aware_score
+          : marginal.information_gain;
+        const currentImportanceGain = importanceGainForCandidate({
+          pathNodes: candidate.pathNodes,
+          pathLinks: candidate.pathLinks,
+          targets: importanceTargets,
+          coveredTargetKeys: coveredImportanceTargets,
+          probePacketBaseBytes,
+          reportHeaderBytes,
+          maxAoIDebtSeverity: importanceMaxAoIDebtSeverity,
+        });
+        const currentImportanceNormalizedGain = clamp(
+          numberValue(currentImportanceGain.gain_per_kb) / importanceEfficiencyReference,
+          0,
+          1,
+        );
+        const currentImportanceScoreBonus = 0;
+        const aoiDebtPromotionAvailable = false;
+        const currentImportanceAoIDebtScoreBonus = 0;
+        candidate.currentImportanceGain = currentImportanceGain;
+        candidate.currentImportanceNormalizedGain = currentImportanceNormalizedGain;
+        candidate.currentImportanceScoreBonus = currentImportanceScoreBonus;
+        candidate.currentImportanceAoIDebtScoreBonus = currentImportanceAoIDebtScoreBonus;
+        const topologyVersionedObjective = evaluateTopologyVersionedPathObjective({
+          enabled: topologyVersionedObjectiveEnabled,
+          topologyClassId: slicePlan.topology_class_id,
+          topologySignature: slicePlan.topology_signature,
+          candidateSource: candidate.candidateSource,
+          planningRepairCount: candidate.path.planning_repair_count,
+          activeLinkCount: activeLinks.length,
+          linkSignals: candidate.linkWeights.map((signal) => ({
+            link_id: signal.link_id,
+            uncertainty: signal.uncertainty_score,
+            topology_risk: signal.topology_risk_score,
+            age: signal.age_score,
+            covered: covered.has(signal.link_id),
+          })),
+          nodeSignals: candidate.nodeStateSignals.map((signal) => ({
+            ...signal,
+            covered: coveredNodes.has(signal.node_id),
+          })),
+          telemetryCost: candidate.rankingTelemetryCost ?? candidate.telemetryCost,
+          costReferences: objectiveCostReferences,
+          nodeInformationGain: candidate.node_state_information_gain,
+          oamTargetScore: numberValue(candidate.oamFeedback?.score) + numberValue(candidate.oamControl?.score),
+          metadataProfile: candidate.metadataProfile?.profile,
+          baselineRankingScore: baselineGreedyScore,
+          weights: topologyVersionedObjectiveWeights,
+          confidenceThreshold: topologyVersionedConfidenceThreshold,
+        });
+        candidate.currentTopologyVersionedObjective = topologyVersionedObjective;
         const newMandatoryTargetIds = uncoveredMandatoryOamTargetIds(candidate, coveredMandatoryOamTargets);
         candidate.currentNewMandatoryTargetIds = newMandatoryTargetIds;
         const mandatoryOamGreedyBoost = newMandatoryTargetIds.length > 0
           ? 1000 + newMandatoryTargetIds.length * 25
           : 0;
-        candidate.rankingScore = (costAwareSampling
-          ? currentCostScore.cost_aware_score
-          : marginal.information_gain) + mandatoryOamGreedyBoost;
+        candidate.rankingScore = topologyVersionedObjective.ranking_score + mandatoryOamGreedyBoost +
+          currentImportanceScoreBonus + currentImportanceAoIDebtScoreBonus;
+        candidate.currentLegacyRankingScore = baselineGreedyScore + mandatoryOamGreedyBoost;
+        candidate.currentNewNodeIds = candidate.pathNodes.filter((nodeId) => !coveredNodes.has(nodeId));
         const marginalGain = numberValue(marginal.information_gain);
         if (
           candidate.rankingScore > bestRankingScore ||
@@ -3512,26 +4533,94 @@ function selectSlicePaths({
           bestRankingScore = candidate.rankingScore;
           bestMarginalGain = marginalGain;
         }
+        if (
+          candidate.currentLegacyRankingScore > legacyBestRankingScore ||
+          (candidate.currentLegacyRankingScore === legacyBestRankingScore && marginalGain > legacyBestMarginalGain)
+        ) {
+          legacyBestIndex = index;
+          legacyBestRankingScore = candidate.currentLegacyRankingScore;
+          legacyBestMarginalGain = marginalGain;
+        }
       }
+      const objectiveCandidate = pending[bestIndex];
+      const legacyCandidate = pending[legacyBestIndex];
+      const objectiveBestIndex = bestIndex;
+      const shadowGuard = chooseConservativeObjectiveCandidate({
+        legacy: {
+          id: String(legacyBestIndex),
+          newNodeIds: legacyCandidate.currentNewNodeIds,
+          marginalInformationGain: legacyCandidate.currentMarginal?.information_gain,
+          telemetryBytes: (legacyCandidate.rankingTelemetryCost ?? legacyCandidate.telemetryCost).estimated_total_telemetry_bytes,
+        },
+        objective: {
+          id: String(bestIndex),
+          newNodeIds: objectiveCandidate.currentNewNodeIds,
+          marginalInformationGain: objectiveCandidate.currentMarginal?.information_gain,
+          telemetryBytes: (objectiveCandidate.rankingTelemetryCost ?? objectiveCandidate.telemetryCost).estimated_total_telemetry_bytes,
+        },
+        minInformationRatio: 0.98,
+      });
+      const objectiveAoIDebtMax = numberValue(objectiveCandidate.currentImportanceGain?.aoi_debt_max_severity);
+      const legacyAoIDebtMax = numberValue(legacyCandidate.currentImportanceGain?.aoi_debt_max_severity);
+      const objectiveOldestTargets = numberValue(objectiveCandidate.currentImportanceGain?.aoi_debt_oldest_target_count);
+      const legacyOldestTargets = numberValue(legacyCandidate.currentImportanceGain?.aoi_debt_oldest_target_count);
+      const objectiveAoIDebt = numberValue(objectiveCandidate.currentImportanceGain?.aoi_debt_severity);
+      const legacyAoIDebt = numberValue(legacyCandidate.currentImportanceGain?.aoi_debt_severity);
+      const objectiveInformation = numberValue(objectiveCandidate.currentMarginal?.information_gain);
+      const legacyInformation = numberValue(legacyCandidate.currentMarginal?.information_gain);
+      const aoiDebtPromotionAvailable = false;
+      const aoiDebtOverride = shouldUseAoIDebtOverride({
+        promotionAvailable: aoiDebtPromotionAvailable,
+        objective: {
+          maxSeverity: objectiveAoIDebtMax,
+          oldestTargets: objectiveOldestTargets,
+          debtSeverity: objectiveAoIDebt,
+          informationGain: objectiveInformation,
+        },
+        legacy: {
+          maxSeverity: legacyAoIDebtMax,
+          oldestTargets: legacyOldestTargets,
+          debtSeverity: legacyAoIDebt,
+          informationGain: legacyInformation,
+        },
+        informationFloor: importanceAoIShadowInformationFloor,
+      });
+      bestIndex = aoiDebtOverride ? objectiveBestIndex : Number(shadowGuard.selected);
+      pending[bestIndex].currentLegacyShadowGuardDecision = aoiDebtOverride
+        ? "aoi-debt-coverage-within-information-floor"
+        : shadowGuard.reason;
+      pending[bestIndex].currentImportanceAoIDebtPromotion = aoiDebtOverride || (
+        aoiDebtPromotionAvailable &&
+        bestIndex === objectiveBestIndex &&
+        objectiveBestIndex !== legacyBestIndex &&
+        numberValue(objectiveCandidate.currentImportanceGain?.aoi_debt_target_count) > 0
+      );
       item = pending.splice(bestIndex, 1)[0];
-    } else {
+    } else if (!item) {
       item = pending.shift();
     }
     const addsCoverage = item.pathLinks.some((linkId) => !covered.has(linkId));
     const coverageStillNeeded = covered.size < targetCoveredLinks;
     const highEnergyRisk = item.energyRisk >= energyGuardThreshold;
     const localRiskCritical = numberValue(item.localAdaptive?.risk) >= 0.6;
-    const itemBytes = numberValue(item.telemetryCost.estimated_total_telemetry_bytes);
+    const itemBytes = scaleBudgetEnabled
+      ? numberValue(
+          item.telemetryCost.estimated_generated_telemetry_bytes,
+          item.telemetryCost.estimated_total_telemetry_bytes,
+        )
+      : numberValue(item.telemetryCost.estimated_total_telemetry_bytes);
     const itemMandatoryTargetIds = mandatoryOamTargetIds(item);
     const newMandatoryTargetIds = uncoveredMandatoryOamTargetIds(item, coveredMandatoryOamTargets);
     item.currentNewMandatoryTargetIds = newMandatoryTargetIds;
     const budgetWouldExceed = telemetryBudgetEnabled &&
-      selected.length >= minPaths &&
+      (scaleBudgetEnabled || selected.length >= minPaths) &&
       telemetryBudgetUsedBytes + itemBytes > planningTelemetryByteBudgetPerSlice;
-    const criticalBudgetOverride = addsCoverage && coverageStillNeeded ||
-      newMandatoryTargetIds.length > 0 ||
-      localRiskCritical ||
-      numberValue(item.forecastProfile.forecast_near_outage_score) >= 0.5;
+    const criticalBudgetOverride = !scaleBudgetEnabled && (
+      addsCoverage && coverageStillNeeded ||
+        newMandatoryTargetIds.length > 0 ||
+        localRiskCritical ||
+        numberValue(item.forecastProfile.forecast_near_outage_score) >= 0.5
+    );
     const repeatsOnlyOamTargets = itemMandatoryTargetIds.length > 0 &&
       newMandatoryTargetIds.length === 0 &&
       !addsCoverage &&
@@ -3559,7 +4648,8 @@ function selectSlicePaths({
       energyGuardSuppressedPaths += 1;
       continue;
     }
-    if (selected.length < requestedPathCount || (covered.size < targetCoveredLinks && addsCoverage) || (localRiskCritical && addsCoverage)) {
+    const activeRequestedPathCount = requestedPathCount;
+    if (selected.length < activeRequestedPathCount || (covered.size < targetCoveredLinks && addsCoverage) || (localRiskCritical && addsCoverage)) {
       if (budgetWouldExceed && criticalBudgetOverride) telemetryBudgetOverridePaths += 1;
       telemetryBudgetUsedBytes += itemBytes;
       const marginal = item.currentMarginal ?? marginalInformationForPath({
@@ -3581,6 +4671,36 @@ function selectSlicePaths({
       item.selectedMarginal = marginal;
       item.selectedCostScore = currentCostScore;
       item.selectedMultiObjectiveScore = item.currentMultiObjectiveScore ?? item.multiObjectiveScore;
+      item.selectedTopologyVersionedObjective = item.currentTopologyVersionedObjective ?? item.topologyVersionedObjective ??
+        evaluateTopologyVersionedPathObjective({
+          enabled: topologyVersionedObjectiveEnabled,
+          topologyClassId: slicePlan.topology_class_id,
+          topologySignature: slicePlan.topology_signature,
+          candidateSource: item.candidateSource,
+          planningRepairCount: item.path.planning_repair_count,
+          activeLinkCount: activeLinks.length,
+          linkSignals: item.linkWeights.map((signal) => ({
+            link_id: signal.link_id,
+            uncertainty: signal.uncertainty_score,
+            topology_risk: signal.topology_risk_score,
+            age: signal.age_score,
+            covered: covered.has(signal.link_id),
+          })),
+          nodeSignals: item.nodeStateSignals.map((signal) => ({
+            ...signal,
+            covered: coveredNodes.has(signal.node_id),
+          })),
+          telemetryCost: item.rankingTelemetryCost ?? item.telemetryCost,
+          costReferences: objectiveCostReferences,
+          nodeInformationGain: item.node_state_information_gain,
+          oamTargetScore: numberValue(item.oamFeedback?.score) + numberValue(item.oamControl?.score),
+          metadataProfile: item.metadataProfile?.profile,
+          baselineRankingScore: costAwareSampling ? currentCostScore.cost_aware_score : marginal.information_gain,
+          weights: topologyVersionedObjectiveWeights,
+          confidenceThreshold: topologyVersionedConfidenceThreshold,
+        });
+      item.selectedLegacyShadowGuardDecision = item.currentLegacyShadowGuardDecision ??
+        (topologyVersionedObjectiveEnabled ? "legacy-shadow-not-evaluated" : "disabled");
       item.telemetryBudgetDecision = telemetryBudgetEnabled
         ? budgetWouldExceed
           ? "critical-coverage-override"
@@ -3591,32 +4711,281 @@ function selectSlicePaths({
         ? planningTelemetryByteBudgetPerSlice - telemetryBudgetUsedBytes
         : "";
       item.selectedNewMandatoryTargetIds = newMandatoryTargetIds;
+      item.selectedImportanceGain = item.currentImportanceGain ?? item.importanceGain;
+      item.selectedImportanceNormalizedGain = item.currentImportanceNormalizedGain ?? item.importanceNormalizedGain ?? 0;
+      item.selectedImportanceScoreBonus = item.currentImportanceScoreBonus ?? item.importanceScoreBonus ?? 0;
+      item.selectedImportanceAoIDebtScoreBonus = item.currentImportanceAoIDebtScoreBonus ?? item.importanceAoIDebtScoreBonus ?? 0;
       selected.push(item);
+      if (item.currentImportanceAoIDebtPromotion) importanceAoIDebtPromotedPaths += 1;
       item.pathLinks.forEach((linkId) => covered.add(linkId));
+      item.pathNodes.forEach((nodeId) => coveredNodes.add(nodeId));
       itemMandatoryTargetIds.forEach((targetId) => coveredMandatoryOamTargets.add(targetId));
+      (item.selectedImportanceGain?.target_ids ?? []).forEach((targetId) => coveredImportanceTargets.add(targetId));
     }
   }
+  }
 
-  enforceMetadataCompressionQuota({
-    selected,
-    adaptiveMetadataProfileEnabled,
-    adaptiveProbeBudget,
-    hopMetadataBytes,
-    costAwarenessWeight,
+  const importanceBaseSelectedPathCount = selected.length;
+  let importanceBudgetNeutralPlan = {
+    rows: selected.map((item, index) => ({ __selected_index: index, ...item.path })),
+    replacements: [],
+    before_bytes: telemetryBudgetUsedBytes,
+    after_bytes: telemetryBudgetUsedBytes,
+    before_weighted_target_coverage: 0,
+    after_weighted_target_coverage: 0,
+    path_count_preserved: true,
+  };
+  if (
+    !topologyVersionedRiskPlannerEnabled &&
+    importancePathScoringEnabled &&
+    importanceBudgetNeutralReplacementEnabled &&
+    selected.length > 0 &&
+    importanceTargets.length > 0
+  ) {
+    const selectedKeys = new Set(selected.map((item) => `${item.path.path}|${item.path.link_ids}`));
+    const replacementCandidates = scored.filter(
+      (item) => !selectedKeys.has(`${item.path.path}|${item.path.link_ids}`),
+    );
+    const descriptorForItem = (item, source, index) => ({
+      ...item.path,
+      [`__${source}_index`]: index,
+      importance_base_value: numberValue(
+        item.selectedMarginal?.information_gain,
+        numberValue(item.base_information_gain, item.score),
+      ),
+      importance_budget_bytes: numberValue(
+        item.telemetryCost?.estimated_generated_telemetry_bytes,
+        item.telemetryCost?.estimated_total_telemetry_bytes,
+      ),
+    });
+    importanceBudgetNeutralPlan = selectBudgetNeutralImportanceReplacements({
+      baseRows: selected.map((item, index) => descriptorForItem(item, "selected", index)),
+      candidateRows: replacementCandidates.map((item, index) => descriptorForItem(item, "candidate", index)),
+      targets: importanceTargets,
+      maxTotalBytes: planningTelemetryByteBudgetPerSlice > 0
+        ? planningTelemetryByteBudgetPerSlice
+        : telemetryBudgetUsedBytes,
+      maxReplacements: Math.max(1, Math.ceil(selected.length * clamp(importanceReplacementRatio, 0, 0.5))),
+      maxBaseValueLossRatio: importanceReplacementMaxBaseLossRatio,
+    });
+    const replacementItems = importanceBudgetNeutralPlan.rows.map((descriptor) => {
+      if (descriptor.__candidate_index === undefined) {
+        return selected[numberValue(descriptor.__selected_index, -1)];
+      }
+      const item = replacementCandidates[numberValue(descriptor.__candidate_index, -1)];
+      if (!item) return null;
+      item.path = {
+        ...item.path,
+        planning_importance_budget_neutral_replacement: true,
+        planning_importance_replaced_probe_id: descriptor.planning_importance_replaced_probe_id ?? "",
+        planning_importance_replacement_target_ids: descriptor.planning_importance_replacement_target_ids ?? "",
+        planning_importance_replacement_target_gain: descriptor.planning_importance_replacement_target_gain ?? 0,
+      };
+      item.selectedMarginal = item.currentMarginal ?? {
+        information_gain: item.base_information_gain,
+        redundancy_penalty: 0,
+        novelty_ratio: 1,
+      };
+      item.selectedCostScore = item.currentCostScore ?? item.costScore;
+      item.selectedMultiObjectiveScore = item.currentMultiObjectiveScore ?? item.multiObjectiveScore;
+      item.selectedTopologyVersionedObjective = item.currentTopologyVersionedObjective ?? item.topologyVersionedObjective;
+      item.selectedLegacyShadowGuardDecision = "budget-neutral-low-value-path-replacement";
+      item.telemetryBudgetDecision = "budget-neutral-replacement-within-hard-cap";
+      item.selectedNewMandatoryTargetIds = uncoveredMandatoryOamTargetIds(item, new Set());
+      item.selectedImportanceGain = item.importanceGain;
+      item.selectedImportanceNormalizedGain = clamp(
+        numberValue(item.importanceGain?.gain_per_kb) / importanceEfficiencyReference,
+        0,
+        1,
+      );
+      item.selectedImportanceScoreBonus = 0;
+      item.selectedImportanceAoIDebtScoreBonus = 0;
+      item.currentImportanceAoIDebtPromotion = true;
+      item.selectedImportanceBudgetNeutralReplacement = true;
+      return item;
+    }).filter(Boolean);
+    selected.splice(0, selected.length, ...replacementItems);
+    covered.clear();
+    coveredNodes.clear();
+    coveredMandatoryOamTargets.clear();
+    coveredImportanceTargets.clear();
+    selected.forEach((item) => {
+      item.pathLinks.forEach((linkId) => covered.add(linkId));
+      item.pathNodes.forEach((nodeId) => coveredNodes.add(nodeId));
+      mandatoryOamTargetIds(item).forEach((targetId) => coveredMandatoryOamTargets.add(targetId));
+      (item.selectedImportanceGain?.target_ids ?? item.importanceGain?.target_ids ?? [])
+        .forEach((targetId) => coveredImportanceTargets.add(targetId));
+    });
+    telemetryBudgetUsedBytes = selected.reduce((sum, item) => sum + numberValue(
+      item.telemetryCost?.estimated_generated_telemetry_bytes,
+      item.telemetryCost?.estimated_total_telemetry_bytes,
+    ), 0);
+    importanceAoIDebtPromotedPaths += importanceBudgetNeutralPlan.replacements.length;
+  }
+  const importanceOldestCoverageRepairFloor = !topologyVersionedRiskPlannerEnabled && importancePathScoringEnabled &&
+    !importanceBudgetNeutralReplacementEnabled &&
+    importanceMaxAoIDebtSeverity >= 1 &&
+    importanceOldestTargetCount > importanceOldestTargetsPerPath
+    ? importanceAoIDebtPathLimit
+    : 0;
+  const importanceAdditiveRepairPathLimit = !topologyVersionedRiskPlannerEnabled && importancePathScoringEnabled && !importanceBudgetNeutralReplacementEnabled
+    ? computeBoundedAdditiveRepairPathLimit({
+        basePathCount: selected.length,
+        ratio: importanceAoIDebtPathRatio,
+        remainingCandidateCount: Math.max(0, scored.length - selected.length),
+        minimumPathCount: importanceOldestCoverageRepairFloor,
+      })
+    : 0;
+  const importanceBaseEstimatedBytes = selected.reduce(
+    (sum, item) => sum + numberValue(item.telemetryCost?.estimated_total_telemetry_bytes),
+    0,
+  );
+  const importanceAdditiveRepairByteBudget = importanceBudgetNeutralReplacementEnabled
+    ? 0
+    : round(importanceBaseEstimatedBytes * clamp(importanceRepairByteBudgetRatio, 0, 0.5));
+  const selectedBasePathKeys = new Set(selected.map((item) => `${item.path.path}|${item.path.link_ids}`));
+  const importanceRepairCandidateItems = scored.filter(
+    (item) => !selectedBasePathKeys.has(`${item.path.path}|${item.path.link_ids}`),
+  );
+  const importanceRepairPlan = selectBoundedImportanceRepairRows({
+    baseRows: selected.map((item, index) => ({
+      ...item.path,
+      __selected_index: index,
+    })),
+    candidateRows: importanceRepairCandidateItems.map((item, index) => ({
+      ...item.path,
+      __repair_candidate_index: index,
+    })),
+    targets: importanceTargets,
+    maxAdditionalPaths: importanceAdditiveRepairPathLimit,
+    maxAdditionalBytes: importanceAdditiveRepairByteBudget,
     probePacketBaseBytes,
     reportHeaderBytes,
-    hopProcessingJ,
-    reportProcessingJ,
-    telemetryTxNjPerByte,
-    multiObjectiveBudgetEnabled,
+    requireStrongEvidence: true,
+  });
+  importanceRepairPlan.repair_rows.forEach((repairRow) => {
+    const item = importanceRepairCandidateItems[numberValue(repairRow.__repair_candidate_index, -1)];
+    if (!item) return;
+    const marginal = marginalInformationForPath({
+      item,
+      covered,
+      sliceIndex: slicePlan.slice_index,
+      linksBySliceAndId,
+    });
+    const gain = importanceGainForCandidate({
+      pathNodes: item.pathNodes,
+      pathLinks: item.pathLinks,
+      targets: importanceTargets,
+      coveredTargetKeys: coveredImportanceTargets,
+      probePacketBaseBytes,
+      reportHeaderBytes,
+      maxAoIDebtSeverity: importanceMaxAoIDebtSeverity,
+      includeAdjacentLinkTargets: true,
+    });
+    if (numberValue(gain.target_count) <= 0) return;
+    const costScore = costAwarePathScore({
+      score: item.score,
+      informationGain: marginal.information_gain,
+      cost: item.telemetryCost,
+      forecastProfile: item.forecastProfile,
+      diversity: item.pathLinks.filter((linkId) => !covered.has(linkId)).length / Math.max(item.pathLinks.length, 1),
+      oamFeedback: item.oamFeedback,
+      oamControl: item.oamControl,
+      weight: costAwarenessWeight,
+    });
+    item.path = {
+      ...item.path,
+      planning_importance_additive_repair: true,
+      planning_importance_repair_actual_bytes: repairRow.importance_repair_actual_bytes,
+      planning_importance_repair_target_ids: repairRow.importance_repair_target_ids,
+    };
+    item.selectedMarginal = marginal;
+    item.selectedCostScore = costScore;
+    item.selectedMultiObjectiveScore = item.multiObjectiveScore;
+    item.selectedTopologyVersionedObjective = item.topologyVersionedObjective;
+    item.selectedLegacyShadowGuardDecision = "bounded-additive-importance-repair-after-base-complete";
+    item.telemetryBudgetDecision = "importance-repair-within-selective-byte-reserve";
+    item.telemetryBudgetUsedBytesAfterSelection = telemetryBudgetUsedBytes + numberValue(repairRow.importance_repair_actual_bytes);
+    item.telemetryBudgetRemainingBytesAfterSelection = Math.max(
+      0,
+      importanceAdditiveRepairByteBudget - numberValue(repairRow.importance_repair_actual_bytes),
+    );
+    item.selectedNewMandatoryTargetIds = uncoveredMandatoryOamTargetIds(item, coveredMandatoryOamTargets);
+    item.selectedImportanceGain = gain;
+    item.selectedImportanceNormalizedGain = clamp(
+      numberValue(gain.gain_per_kb) / importanceEfficiencyReference,
+      0,
+      1,
+    );
+    item.selectedImportanceScoreBonus = 0;
+    item.selectedImportanceAoIDebtScoreBonus = 0;
+    item.currentImportanceAoIDebtPromotion = true;
+    item.selectedImportanceAdditiveRepair = true;
+    selected.push(item);
+    importanceAoIDebtPromotedPaths += 1;
+    telemetryBudgetUsedBytes += numberValue(repairRow.importance_repair_actual_bytes);
+    item.pathLinks.forEach((linkId) => covered.add(linkId));
+    item.pathNodes.forEach((nodeId) => coveredNodes.add(nodeId));
+    mandatoryOamTargetIds(item).forEach((targetId) => coveredMandatoryOamTargets.add(targetId));
+    gain.target_ids.forEach((targetId) => coveredImportanceTargets.add(targetId));
   });
 
-  selected.forEach((item) => item.pathLinks.forEach((linkId) => selectedLastSeen.set(linkId, slicePosition)));
+  let finalizedTelemetryBudgetBytes = 0;
+  selected.forEach((item) => {
+    const selectedBytes = scaleBudgetEnabled
+      ? numberValue(
+          item.telemetryCost?.estimated_generated_telemetry_bytes,
+          item.telemetryCost?.estimated_total_telemetry_bytes,
+        )
+      : numberValue(item.telemetryCost?.estimated_total_telemetry_bytes);
+    finalizedTelemetryBudgetBytes += selectedBytes;
+    item.telemetryBudgetUsedBytesAfterSelection = round(finalizedTelemetryBudgetBytes);
+    item.telemetryBudgetRemainingBytesAfterSelection = telemetryBudgetEnabled
+      ? round(Math.max(0, planningTelemetryByteBudgetPerSlice - finalizedTelemetryBudgetBytes))
+      : "";
+  });
+  telemetryBudgetUsedBytes = finalizedTelemetryBudgetBytes;
+
+  if (!topologyVersionedRiskPlannerEnabled) {
+    enforceMetadataCompressionQuota({
+      selected,
+      adaptiveMetadataProfileEnabled,
+      adaptiveProbeBudget,
+      hopMetadataBytes,
+      costAwarenessWeight,
+      probePacketBaseBytes,
+      reportHeaderBytes,
+      hopProcessingJ,
+      reportProcessingJ,
+      telemetryTxNjPerByte,
+      multiObjectiveBudgetEnabled,
+    });
+  }
+
+  selected.forEach((item) => {
+    const observations = item.unifiedPlannerAction?.observations;
+    const observedLinks = observations
+      ? observations.filter((observation) => observation.type === "link").map((observation) => observation.id)
+      : item.pathLinks;
+    const observedNodes = observations
+      ? observations.filter((observation) => observation.type === "node").map((observation) => observation.id)
+      : item.pathNodes;
+    observedLinks.forEach((linkId) => selectedLastSeen.set(linkId, slicePosition));
+    observedNodes.forEach((nodeId) => selectedNodeLastSeen.set(nodeId, slicePosition));
+  });
 
   const repairedCandidatePaths = planningCandidates.filter((path) => numberValue(path.planning_repair_count) > 0).length;
   const selectedRepairedPaths = selected.filter((item) => numberValue(item.path.planning_repair_count) > 0).length;
+  const unifiedPlanningMode = unifiedPlannerDecision?.selected_mode ?? "";
+  const effectiveCandidateSource = unifiedPlanningMode === "reuse"
+    ? "topology-reuse-cache"
+    : unifiedPlanningMode === "repair"
+      ? "topology-reuse-cache-local-repair"
+      : unifiedPlanningMode === "fresh"
+        ? "fresh-slice-plan"
+        : candidateSource;
   const planningCost = estimatePlanningCost({
-    candidateSource,
+    candidateSource: effectiveCandidateSource,
     topologyReuseDecision: slicePlan.topology_reuse_decision,
     activeLinkCount: activeLinks.length,
     candidatePathCount: candidatePaths.length,
@@ -3633,7 +5002,13 @@ function selectSlicePaths({
     planning_algorithm: algorithm,
     source_candidate_probe_id: item.path.probe_id,
     source_candidate_algorithm: item.path.planning_algorithm,
+    ...currentSelectionImportanceRepairFields({
+      row: item.path,
+      selectedAsRepair: item.selectedImportanceAdditiveRepair === true,
+    }),
     topology_class_id: slicePlan.topology_class_id,
+    topology_signature: slicePlan.topology_signature,
+    topology_version_id: slicePlan.topology_version_id,
     topology_forecast_horizon_slices: slicePlan.topology_forecast_horizon_slices,
     topology_forecast_stable_window_slices: slicePlan.topology_forecast_stable_window_slices,
     topology_forecast_next_major_drift_in_slices: slicePlan.topology_forecast_next_major_drift_in_slices,
@@ -3643,6 +5018,30 @@ function selectSlicePaths({
     topology_forecast_reuse_confidence: slicePlan.topology_forecast_reuse_confidence,
     topology_forecast_recommended_plan_mode: slicePlan.topology_forecast_recommended_plan_mode,
     topology_forecast_target_sampling_boost: round(topologyForecastTargetBoost),
+    unified_planner_enabled: topologyVersionedRiskPlannerEnabled,
+    unified_planner_mode: unifiedPlannerDecision?.selected_mode ?? "legacy",
+    unified_mode_prefilter_policy: slicePlan.unified_mode_prefilter_policy ?? "legacy",
+    unified_mode_prefilter_selected_modes: slicePlan.unified_mode_prefilter_selected_modes ?? "",
+    unified_metadata_action: item.unifiedPlannerAction?.metadata_action ?? "legacy",
+    unified_marginal_value: item.unifiedPlannerAction?.marginal_value ?? "",
+    unified_marginal_risk_gain: item.unifiedPlannerAction?.marginal_risk_gain ?? "",
+    unified_value_per_byte: item.unifiedPlannerAction?.marginal_value_per_byte ?? "",
+    unified_observed_node_ids: item.unifiedPlannerAction
+      ? item.unifiedPlannerAction.observations.filter((observation) => observation.type === "node").map((observation) => observation.id).join(" > ")
+      : item.pathNodes.join(" > "),
+    unified_observed_link_ids: item.unifiedPlannerAction
+      ? item.unifiedPlannerAction.observations.filter((observation) => observation.type === "link").map((observation) => observation.id).join(" > ")
+      : item.pathLinks.join(" > "),
+    selective_metadata_enabled: Boolean(item.unifiedSelectiveMetadataPlan),
+    selective_metadata_plan_json: item.unifiedSelectiveMetadataPlan
+      ? JSON.stringify(item.unifiedSelectiveMetadataPlan.hops)
+      : "",
+    target_mask_bytes: item.unifiedSelectiveMetadataPlan?.target_mask_bytes ?? 0,
+    selective_metadata_bytes: item.unifiedSelectiveMetadataPlan?.metadata_bytes ?? "",
+    selective_metadata_saved_bytes: item.unifiedSelectiveMetadataPlan?.saved_payload_bytes ?? "",
+    forward_only_hop_count: item.unifiedSelectiveMetadataPlan
+      ? item.unifiedSelectiveMetadataPlan.hops.filter((hop) => !hop.writes_observation).length
+      : 0,
     int_mc_score: item.selectedCostScore?.cost_aware_score ?? item.costScore.cost_aware_score,
     base_int_mc_score: round(item.base_int_mc_score),
     low_rank_path_information_gain: item.selectedMarginal?.information_gain ?? round(item.base_information_gain),
@@ -3655,6 +5054,51 @@ function selectSlicePaths({
     score_formula: item.selectedCostScore?.score_formula ?? item.costScore.score_formula,
     score_numerator_information_gain: item.selectedCostScore?.score_numerator_information_gain ?? item.costScore.score_numerator_information_gain,
     score_denominator_telemetry_kb: item.selectedCostScore?.score_denominator_telemetry_kb ?? item.costScore.score_denominator_telemetry_kb,
+    topology_versioned_objective_enabled: topologyVersionedObjectiveEnabled,
+    topology_versioned_objective_value: item.selectedTopologyVersionedObjective?.objective_value ?? "",
+    topology_versioned_no_probe_objective: item.selectedTopologyVersionedObjective?.no_probe_objective ?? "",
+    topology_versioned_objective_advantage: item.selectedTopologyVersionedObjective?.objective_advantage ?? "",
+    topology_versioned_information_gain: item.selectedTopologyVersionedObjective?.information_gain ?? "",
+    topology_versioned_redundancy_penalty: item.selectedTopologyVersionedObjective?.redundancy_penalty ?? "",
+    topology_versioned_node_information_gain: item.selectedTopologyVersionedObjective?.node_information_gain ?? "",
+    topology_versioned_node_redundancy_penalty: item.selectedTopologyVersionedObjective?.node_redundancy_penalty ?? "",
+    topology_versioned_expected_error_reduction: item.selectedTopologyVersionedObjective?.expected_error_reduction ?? "",
+    topology_versioned_expected_residual_error: item.selectedTopologyVersionedObjective?.expected_residual_error ?? "",
+    topology_versioned_expected_aoi_reduction: item.selectedTopologyVersionedObjective?.expected_aoi_reduction ?? "",
+    topology_versioned_expected_residual_aoi: item.selectedTopologyVersionedObjective?.expected_residual_aoi ?? "",
+    topology_versioned_normalized_bytes_cost: item.selectedTopologyVersionedObjective?.normalized_bytes_cost ?? "",
+    topology_versioned_normalized_energy_cost: item.selectedTopologyVersionedObjective?.normalized_energy_cost ?? "",
+    topology_versioned_normalized_planning_cost: item.selectedTopologyVersionedObjective?.normalized_planning_cost ?? "",
+    topology_versioned_evidence_confidence: item.selectedTopologyVersionedObjective?.evidence_confidence ?? "",
+    topology_versioned_path_topology_share: item.selectedTopologyVersionedObjective?.path_topology_share ?? "",
+    topology_versioned_structural_granularity_scale: item.selectedTopologyVersionedObjective?.structural_granularity_scale ?? "",
+    topology_versioned_gate_decision: item.selectedTopologyVersionedObjective?.gate_decision ?? "",
+    topology_versioned_legacy_shadow_guard: item.selectedLegacyShadowGuardDecision,
+    topology_versioned_score_adjustment: item.selectedTopologyVersionedObjective?.conservative_score_adjustment ?? 0,
+    topology_versioned_ranking_score: item.selectedTopologyVersionedObjective?.ranking_score ?? item.rankingScore,
+    topology_versioned_metadata_observation_yield: item.selectedTopologyVersionedObjective?.metadata_observation_yield ?? "",
+    topology_versioned_objective_formula: item.selectedTopologyVersionedObjective?.objective_formula ?? "legacy-ranking",
+    topology_versioned_information_formula: item.selectedTopologyVersionedObjective?.information_formula ?? "legacy-ranking",
+    importance_path_scoring_enabled: importancePathScoringEnabled,
+    importance_budget_neutral_replacement_enabled: importanceBudgetNeutralReplacementEnabled,
+    importance_budget_neutral_replacement: Boolean(item.selectedImportanceBudgetNeutralReplacement),
+    importance_replaced_probe_id: item.path.planning_importance_replaced_probe_id ?? "",
+    importance_replacement_target_ids: item.path.planning_importance_replacement_target_ids ?? "",
+    importance_replacement_target_gain: item.path.planning_importance_replacement_target_gain ?? 0,
+    importance_target_gain: item.selectedImportanceGain?.information_gain ?? item.importanceGain?.information_gain ?? 0,
+    importance_target_gain_per_kb: item.selectedImportanceGain?.gain_per_kb ?? item.importanceGain?.gain_per_kb ?? 0,
+    importance_target_count: item.selectedImportanceGain?.target_count ?? item.importanceGain?.target_count ?? 0,
+    importance_mandatory_target_count: item.selectedImportanceGain?.mandatory_target_count ?? item.importanceGain?.mandatory_target_count ?? 0,
+    importance_aoi_debt_target_count: item.selectedImportanceGain?.aoi_debt_target_count ?? item.importanceGain?.aoi_debt_target_count ?? 0,
+    importance_aoi_debt_severity: item.selectedImportanceGain?.aoi_debt_severity ?? item.importanceGain?.aoi_debt_severity ?? 0,
+    importance_aoi_debt_max_severity: item.selectedImportanceGain?.aoi_debt_max_severity ?? item.importanceGain?.aoi_debt_max_severity ?? 0,
+    importance_aoi_debt_oldest_target_count: item.selectedImportanceGain?.aoi_debt_oldest_target_count ?? item.importanceGain?.aoi_debt_oldest_target_count ?? 0,
+    importance_aoi_debt_target_ids: (item.selectedImportanceGain?.aoi_debt_target_ids ?? item.importanceGain?.aoi_debt_target_ids ?? []).join(" > "),
+    importance_target_ids: (item.selectedImportanceGain?.target_ids ?? item.importanceGain?.target_ids ?? []).join(" > "),
+    importance_normalized_gain: item.selectedImportanceNormalizedGain ?? item.importanceNormalizedGain ?? 0,
+    importance_score_bonus: item.selectedImportanceScoreBonus ?? item.importanceScoreBonus ?? 0,
+    importance_aoi_debt_score_bonus: item.selectedImportanceAoIDebtScoreBonus ?? item.importanceAoIDebtScoreBonus ?? 0,
+    importance_aoi_debt_promotion: Boolean(item.currentImportanceAoIDebtPromotion),
     cost_aware_sampling_enabled: costAwareSampling,
     cost_awareness_weight: costAwarenessWeight,
     oam_budget_applied: oamBudget.oam_budget_applied,
@@ -3683,6 +5127,16 @@ function selectSlicePaths({
     adaptive_probe_budget_reuse_confidence: adaptiveProbeBudget.adaptive_probe_budget_reuse_confidence,
     adaptive_probe_budget_reuse_margin: adaptiveProbeBudget.adaptive_probe_budget_reuse_margin,
     adaptive_probe_budget_drift_pressure: adaptiveProbeBudget.adaptive_probe_budget_drift_pressure,
+    scale_budget_enabled: scaleBudgetEnabled,
+    scale_budget_source: scaleBudget?.byte_budget_source ?? "disabled",
+    scale_budget_bytes: scaleBudget?.byte_budget ?? 0,
+    scale_budget_derived_bytes: scaleBudget?.derived_byte_budget ?? 0,
+    scale_budget_witness_paths: scaleBudget?.witness_path_count ?? 0,
+    scale_budget_safe_path_cap: scaleBudget?.safe_path_cap ?? configuredSelectedLimit,
+    scale_budget_target_node_count: scaleBudget?.target_node_count ?? 0,
+    scale_budget_target_active_link_count: scaleBudget?.target_active_link_count ?? 0,
+    scale_budget_coverage_feasibility: scaleBudget?.coverage_feasibility ?? "disabled",
+    scale_budget_feasible_aoi_bound_slices: scaleBudget?.feasible_aoi_bound_slices ?? "",
     configured_max_paths_per_slice: configuredSelectedLimit,
     adaptive_probe_budget_configured_max_paths_per_slice: adaptiveProbeBudget.adaptive_probe_budget_configured_max_paths_per_slice,
     adaptive_probe_budget_effective_max_paths_per_slice: adaptiveProbeBudget.adaptive_probe_budget_effective_max_paths_per_slice,
@@ -3813,8 +5267,8 @@ function selectSlicePaths({
       ? "critical-coverage-override"
       : "normal-telemetry",
     planning_repair_count: item.path.planning_repair_count,
-    candidate_source: candidateSource,
-    planning_reuse_mode: planningCost.planning_reuse_mode,
+    candidate_source: item.candidateSource ?? effectiveCandidateSource,
+    planning_reuse_mode: unifiedPlanningMode || planningCost.planning_reuse_mode,
     planning_cache_hit: planningCost.planning_cache_hit,
     planning_cost_saving_ratio: planningCost.planning_cost_saving_ratio,
     oam_replan_pressure: slicePlan.oam_replan_pressure,
@@ -3910,9 +5364,25 @@ function selectSlicePaths({
       slice_index: slicePlan.slice_index,
       time: slicePlan.time,
       topology_class_id: slicePlan.topology_class_id,
+      topology_signature: slicePlan.topology_signature,
+      topology_version_id: slicePlan.topology_version_id,
       candidate_paths: candidatePaths.length,
       planning_candidate_paths: planningCandidates.length,
       selected_paths: rows.length,
+      scale_budget_enabled: scaleBudgetEnabled,
+      scale_budget_source: scaleBudget?.byte_budget_source ?? "disabled",
+      scale_budget_bytes: scaleBudget?.byte_budget ?? 0,
+      scale_budget_derived_bytes: scaleBudget?.derived_byte_budget ?? 0,
+      scale_budget_witness_paths: scaleBudget?.witness_path_count ?? 0,
+      scale_budget_safe_path_cap: scaleBudget?.safe_path_cap ?? configuredSelectedLimit,
+      scale_budget_target_node_count: scaleBudget?.target_node_count ?? 0,
+      scale_budget_target_active_link_count: scaleBudget?.target_active_link_count ?? 0,
+      scale_budget_covered_nodes_within_budget: scaleBudget?.covered_nodes_within_budget ?? 0,
+      scale_budget_covered_active_links_within_budget: scaleBudget?.covered_active_links_within_budget ?? 0,
+      scale_budget_coverage_shortfall_nodes: scaleBudget?.coverage_shortfall_nodes ?? 0,
+      scale_budget_coverage_shortfall_links: scaleBudget?.coverage_shortfall_links ?? 0,
+      scale_budget_coverage_feasibility: scaleBudget?.coverage_feasibility ?? "disabled",
+      scale_budget_feasible_aoi_bound_slices: scaleBudget?.feasible_aoi_bound_slices ?? "",
       configured_max_paths_per_slice: configuredSelectedLimit,
       adaptive_probe_budget_configured_max_paths_per_slice: adaptiveProbeBudget.adaptive_probe_budget_configured_max_paths_per_slice,
       adaptive_probe_budget_effective_max_paths_per_slice: adaptiveProbeBudget.adaptive_probe_budget_effective_max_paths_per_slice,
@@ -3920,7 +5390,143 @@ function selectSlicePaths({
       active_links: activeLinks.length,
       sampled_active_links: covered.size,
       active_link_sampling_coverage: round(covered.size / Math.max(activeLinks.length, 1)),
-      score_formula: "Score(P)=marginal_information_gain(P|S)/telemetry_cost_kb(P)",
+      score_formula: topologyVersionedRiskPlannerEnabled
+        ? "Score(a|S)=(information+risk_weight*risk-redundancy_weight*redundancy)/telemetry_bytes"
+        : "Score(P)=marginal_information_gain(P|S)/telemetry_cost_kb(P)",
+      unified_planner_enabled: topologyVersionedRiskPlannerEnabled,
+      unified_planner_name: topologyVersionedRiskPlannerEnabled ? "topology-versioned-risk-int" : "legacy-int-mc",
+      unified_planner_selected_mode: unifiedPlannerDecision?.selected_mode ?? "legacy",
+      unified_mode_prefilter_policy: slicePlan.unified_mode_prefilter_policy ?? "legacy",
+      unified_mode_prefilter_reason: slicePlan.unified_mode_prefilter_reason ?? "legacy-planner",
+      unified_mode_prefilter_selected_modes: slicePlan.unified_mode_prefilter_selected_modes ?? "",
+      unified_mode_prefilter_changed_link_ratio: slicePlan.unified_mode_prefilter_changed_link_ratio ?? "",
+      unified_mode_prefilter_rejection_reasons: slicePlan.unified_mode_prefilter_rejection_reasons ?? "",
+      unified_structural_cache_source_slice: slicePlan.unified_structural_cache_source_slice ?? "",
+      unified_structural_cache_age_slices: slicePlan.unified_structural_cache_age_slices ?? "",
+      unified_structural_cache_similarity: slicePlan.unified_structural_cache_similarity ?? "",
+      unified_structural_cache_eligible: slicePlan.unified_structural_cache_eligible ?? false,
+      unified_structural_cache_rejection_reasons: slicePlan.unified_structural_cache_rejection_reasons ?? "",
+      unified_structural_cache_adaptive_enabled: slicePlan.unified_structural_cache_adaptive_enabled ?? false,
+      unified_structural_cache_adaptive_policy: slicePlan.unified_structural_cache_adaptive_policy ?? "",
+      unified_structural_cache_adaptive_reason: slicePlan.unified_structural_cache_adaptive_reason ?? "",
+      unified_structural_cache_error_tolerance: slicePlan.unified_structural_cache_error_tolerance ?? 0,
+      unified_structural_cache_estimated_error_increase_proxy:
+        slicePlan.unified_structural_cache_estimated_error_increase_proxy ?? 0,
+      unified_structural_cache_error_tolerance_utilization:
+        slicePlan.unified_structural_cache_error_tolerance_utilization ?? 0,
+      unified_structural_cache_relaxation_factor: slicePlan.unified_structural_cache_relaxation_factor ?? 0,
+      unified_structural_cache_risk_pressure: slicePlan.unified_structural_cache_risk_pressure ?? 0,
+      unified_structural_cache_effective_similarity_threshold:
+        slicePlan.unified_structural_cache_effective_similarity_threshold ?? "",
+      unified_structural_cache_effective_changed_link_limit:
+        slicePlan.unified_structural_cache_effective_changed_link_limit ?? "",
+      unified_structural_cache_effective_affected_path_limit:
+        slicePlan.unified_structural_cache_effective_affected_path_limit ?? "",
+      unified_structural_cache_effective_valid_path_floor:
+        slicePlan.unified_structural_cache_effective_valid_path_floor ?? "",
+      unified_cached_path_count: slicePlan.unified_cached_path_count ?? 0,
+      unified_affected_cached_path_count: slicePlan.unified_affected_cached_path_count ?? 0,
+      unified_affected_cached_path_ratio: slicePlan.unified_affected_cached_path_ratio ?? 0,
+      unified_inactive_cached_path_count: slicePlan.unified_inactive_cached_path_count ?? 0,
+      unified_retained_cached_path_count: slicePlan.unified_retained_cached_path_count ?? 0,
+      unified_planner_plan_objective: unifiedPlannerDecision?.plan_objective ?? "",
+      unified_planner_information_gain: unifiedPlannerDecision?.information_gain ?? "",
+      unified_planner_risk_gain: unifiedPlannerDecision?.risk_gain ?? "",
+      unified_planner_redundancy_penalty: unifiedPlannerDecision?.redundancy_penalty ?? "",
+      unified_planner_planning_cost: unifiedPlannerDecision?.planning_cost ?? "",
+      unified_planner_candidate_modes: unifiedPlannerDecision?.mode_results?.map((result) => result.mode).join(" > ") ?? "",
+      unified_planner_budget_violations: unifiedPlannerDecision?.budget_violations ?? 0,
+      unified_planner_selection_engine: unifiedPlannerDecision?.selection_engine ?? "legacy",
+      unified_planner_marginal_evaluations: unifiedPlannerDecision?.marginal_evaluation_count ?? 0,
+      unified_planner_score_cache_hits: unifiedPlannerDecision?.score_cache_hits ?? 0,
+      unified_planner_score_cache_recomputations: unifiedPlannerDecision?.score_cache_recomputations ?? 0,
+      unified_stable_path_cache_hits: unifiedStablePathCacheHits,
+      unified_stable_path_cache_misses: unifiedStablePathCacheMisses,
+      unified_repair_candidate_budget: unifiedRepairCandidateBudget,
+      unified_repair_refill_paths: unifiedRepairRefillPaths,
+      unified_planner_full_actions: selected.filter((item) => item.unifiedPlannerAction?.metadata_action === "full").length,
+      unified_planner_compact_actions: selected.filter((item) => item.unifiedPlannerAction?.metadata_action === "compact").length,
+      unified_planner_selective_actions: selected.filter((item) => item.unifiedPlannerAction?.metadata_action === "selective").length,
+      unified_planner_forward_only_hops: selected.reduce(
+        (sum, item) => sum + (item.unifiedSelectiveMetadataPlan?.hops ?? []).filter((hop) => !hop.writes_observation).length,
+        0,
+      ),
+      unified_topology_added_links: splitPath(slicePlan.unified_topology_added_link_ids).length,
+      unified_topology_removed_links: splitPath(slicePlan.unified_topology_removed_link_ids).length,
+      importance_path_scoring_enabled: importancePathScoringEnabled,
+      importance_budget_neutral_replacement_enabled: importanceBudgetNeutralReplacementEnabled,
+      importance_budget_neutral_replacements: importanceBudgetNeutralPlan.replacements.length,
+      importance_budget_neutral_before_bytes: importanceBudgetNeutralPlan.before_bytes,
+      importance_budget_neutral_after_bytes: importanceBudgetNeutralPlan.after_bytes,
+      importance_budget_neutral_before_weighted_target_coverage: importanceBudgetNeutralPlan.before_weighted_target_coverage,
+      importance_budget_neutral_after_weighted_target_coverage: importanceBudgetNeutralPlan.after_weighted_target_coverage,
+      importance_budget_neutral_path_count_preserved: importanceBudgetNeutralPlan.path_count_preserved,
+      importance_replacement_ratio: importanceReplacementRatio,
+      importance_replacement_max_base_loss_ratio: importanceReplacementMaxBaseLossRatio,
+      importance_score_weight: importanceScoreWeight,
+      importance_shadow_information_floor: importanceShadowInformationFloor,
+      importance_aoi_shadow_information_floor: importanceAoIShadowInformationFloor,
+      importance_aoi_debt_path_ratio: importanceAoIDebtPathRatio,
+      importance_aoi_debt_path_limit: importanceAoIDebtPathLimit,
+      importance_aoi_debt_promoted_paths: importanceAoIDebtPromotedPaths,
+      importance_base_selected_paths: importanceBaseSelectedPathCount,
+      importance_oldest_coverage_repair_floor: importanceOldestCoverageRepairFloor,
+      importance_additive_repair_path_limit: importanceAdditiveRepairPathLimit,
+      importance_additive_repair_paths: importanceRepairPlan.repair_rows.length,
+      importance_additive_repair_byte_budget: importanceAdditiveRepairByteBudget,
+      importance_additive_repair_estimated_bytes: importanceRepairPlan.estimated_additional_bytes,
+      importance_aoi_debt_oldest_target_count: importanceOldestTargetCount,
+      importance_aoi_debt_oldest_targets_per_path: importanceOldestTargetsPerPath,
+      importance_adjusted_requested_paths: importanceAdjustedRequestedPathCount,
+      importance_targets: importanceTargets.length,
+      importance_covered_targets: coveredImportanceTargets.size,
+      importance_target_coverage: round(coveredImportanceTargets.size / Math.max(importanceTargets.length, 1)),
+      importance_mandatory_targets: importanceTargets.filter((target) => boolValue(target.mandatory)).length,
+      importance_aoi_debt_targets: importanceTargets.filter(
+        (target) => boolValue(target.coverage_required) || numberValue(target.age_score) >= 1,
+      ).length,
+      importance_covered_mandatory_targets: [...coveredImportanceTargets].filter((targetKey) =>
+        importanceTargets.some((target) => importanceTargetKey(target) === targetKey && boolValue(target.mandatory))
+      ).length,
+      importance_covered_aoi_debt_targets: [...coveredImportanceTargets].filter((targetKey) =>
+        importanceTargets.some((target) => importanceTargetKey(target) === targetKey &&
+          (boolValue(target.coverage_required) || numberValue(target.age_score) >= 1))
+      ).length,
+      importance_selected_information_gain: round(selected.reduce(
+        (sum, item) => sum + numberValue(item.selectedImportanceGain?.information_gain),
+        0,
+      )),
+      mean_importance_gain_per_kb: round(mean(selected.map((item) => numberValue(item.selectedImportanceGain?.gain_per_kb)))),
+      mean_importance_score_bonus: round(mean(selected.map((item) => numberValue(item.selectedImportanceScoreBonus)))),
+      topology_versioned_objective_enabled: topologyVersionedObjectiveEnabled,
+      topology_versioned_objective_formula: "lambda_bytes*C_bytes+lambda_energy*C_energy+lambda_planning*C_planning+lambda_error*E_residual+lambda_aoi*AoI_residual",
+      topology_versioned_information_formula: "sum(uncovered_uncertainty*risk_multiplier*metadata_yield)-gamma*redundancy",
+      topology_versioned_lambda_bytes: topologyVersionedObjectiveWeights.bytes,
+      topology_versioned_lambda_energy: topologyVersionedObjectiveWeights.energy,
+      topology_versioned_lambda_planning: topologyVersionedObjectiveWeights.planning,
+      topology_versioned_lambda_expected_error: topologyVersionedObjectiveWeights.expectedError,
+      topology_versioned_lambda_aoi: topologyVersionedObjectiveWeights.aoi,
+      topology_versioned_confidence_threshold: topologyVersionedConfidenceThreshold,
+      topology_versioned_bytes_reference: round(objectiveCostReferences.bytes),
+      topology_versioned_energy_reference_j: round(objectiveCostReferences.energyJ),
+      mean_topology_versioned_objective: round(mean(selected.map((item) => numberValue(item.selectedTopologyVersionedObjective?.objective_value, NaN)).filter(Number.isFinite))),
+      mean_topology_versioned_objective_advantage: round(mean(selected.map((item) => numberValue(item.selectedTopologyVersionedObjective?.objective_advantage, NaN)).filter(Number.isFinite))),
+      mean_topology_versioned_node_information_gain: round(mean(selected.map((item) => numberValue(item.selectedTopologyVersionedObjective?.node_information_gain, NaN)).filter(Number.isFinite))),
+      mean_topology_versioned_node_redundancy_penalty: round(mean(selected.map((item) => numberValue(item.selectedTopologyVersionedObjective?.node_redundancy_penalty, NaN)).filter(Number.isFinite))),
+      mean_topology_versioned_expected_error_reduction: round(mean(selected.map((item) => numberValue(item.selectedTopologyVersionedObjective?.expected_error_reduction, NaN)).filter(Number.isFinite))),
+      mean_topology_versioned_expected_aoi_reduction: round(mean(selected.map((item) => numberValue(item.selectedTopologyVersionedObjective?.expected_aoi_reduction, NaN)).filter(Number.isFinite))),
+      mean_topology_versioned_evidence_confidence: round(mean(selected.map((item) => numberValue(item.selectedTopologyVersionedObjective?.evidence_confidence, NaN)).filter(Number.isFinite))),
+      mean_topology_versioned_path_topology_share: round(mean(selected.map((item) => numberValue(item.selectedTopologyVersionedObjective?.path_topology_share, NaN)).filter(Number.isFinite))),
+      mean_topology_versioned_structural_granularity_scale: round(mean(selected.map((item) => numberValue(item.selectedTopologyVersionedObjective?.structural_granularity_scale, NaN)).filter(Number.isFinite))),
+      mean_topology_versioned_score_adjustment: round(mean(selected.map((item) => numberValue(item.selectedTopologyVersionedObjective?.conservative_score_adjustment, NaN)).filter(Number.isFinite))),
+      topology_versioned_promoted_paths: selected.filter((item) => item.selectedTopologyVersionedObjective?.gate_decision === "conservative-promotion").length,
+      topology_versioned_demoted_paths: selected.filter((item) => item.selectedTopologyVersionedObjective?.gate_decision === "conservative-demotion").length,
+      topology_versioned_legacy_fallback_paths: selected.filter((item) => String(item.selectedTopologyVersionedObjective?.gate_decision || "").startsWith("legacy-")).length,
+      topology_versioned_shadow_guard_agree_paths: selected.filter((item) => item.selectedLegacyShadowGuardDecision === "legacy-objective-agree").length,
+      topology_versioned_shadow_guard_admitted_paths: selected.filter((item) => item.selectedLegacyShadowGuardDecision === "objective-admitted-by-legacy-shadow-guard").length,
+      topology_versioned_shadow_guard_node_fallbacks: selected.filter((item) => item.selectedLegacyShadowGuardDecision === "legacy-shadow-node-coverage-guard").length,
+      topology_versioned_shadow_guard_byte_fallbacks: selected.filter((item) => item.selectedLegacyShadowGuardDecision === "legacy-shadow-byte-noninferiority-guard").length,
+      topology_versioned_shadow_guard_information_fallbacks: selected.filter((item) => item.selectedLegacyShadowGuardDecision === "legacy-shadow-information-noninferiority-guard").length,
       mean_marginal_information_gain: round(mean(selected.map((item) => numberValue(item.selectedMarginal?.information_gain, item.base_information_gain)))),
       mean_base_information_gain: round(mean(selected.map((item) => numberValue(item.selectedMarginal?.base_information_gain, item.base_information_gain)))),
       node_state_sampling_scale: nodeSamplingScale,
@@ -4037,9 +5643,11 @@ function selectSlicePaths({
       mean_forecast_near_outage_score: round(mean(selected.map((item) => item.forecastProfile.forecast_near_outage_score))),
       forecast_upcoming_outage_links: selected.reduce((total, item) => total + numberValue(item.forecastProfile.forecast_upcoming_outage_links), 0),
       forecast_upcoming_recovery_links: selected.reduce((total, item) => total + numberValue(item.forecastProfile.forecast_upcoming_recovery_links), 0),
-      candidate_source: candidateSource,
+      candidate_source: effectiveCandidateSource,
       topology_reuse_decision: slicePlan.topology_reuse_decision,
       topology_similarity_score: slicePlan.topology_similarity_score,
+      topology_legacy_composite_similarity_score: slicePlan.topology_legacy_composite_similarity_score,
+      topology_dynamic_similarity_score: slicePlan.topology_dynamic_similarity_score,
       active_jaccard: slicePlan.active_jaccard,
       inter_plane_jaccard: slicePlan.inter_plane_jaccard,
       bottleneck_jaccard: slicePlan.bottleneck_jaccard,
@@ -4116,9 +5724,11 @@ function selectSlicePaths({
       telemetry_byte_budget_enabled: telemetryBudgetEnabled,
       telemetry_byte_budget_per_slice: planningTelemetryByteBudgetPerSlice,
       telemetry_budget_policy: telemetryBudgetEnabled
-        ? oamBudget.oam_budget_applied
-          ? "oam-adaptive-soft-slice-byte-budget-with-critical-coverage-override"
-          : "soft-slice-byte-budget-with-critical-coverage-override"
+        ? topologyVersionedRiskPlannerEnabled
+          ? "strict-hard-slice-byte-budget-without-override"
+          : oamBudget.oam_budget_applied
+            ? "oam-adaptive-soft-slice-byte-budget-with-critical-coverage-override"
+            : "soft-slice-byte-budget-with-critical-coverage-override"
         : "disabled",
       telemetry_budget_used_bytes: round(telemetryBudgetUsedBytes),
       telemetry_budget_remaining_bytes: telemetryBudgetEnabled ? round(planningTelemetryByteBudgetPerSlice - telemetryBudgetUsedBytes) : "",
@@ -4174,6 +5784,15 @@ const topologyClassThreshold = numberArg(args, "--topology-class-threshold", 0.0
 const adaptiveReuse = argValue(args, "--adaptive-reuse", "true").toLowerCase() !== "false";
 const incrementalTopologyRepair = argValue(args, "--incremental-topology-repair", "true").toLowerCase() !== "false";
 const forecastRiskScoring = argValue(args, "--forecast-risk-scoring", "true").toLowerCase() !== "false";
+const topologyVersionedObjectiveEnabled = argValue(args, "--topology-versioned-objective", "false").toLowerCase() === "true";
+const topologyVersionedObjectiveWeights = {
+  bytes: Math.max(0, numberArg(args, "--objective-lambda-bytes", DEFAULT_TOPOLOGY_VERSIONED_OBJECTIVE_WEIGHTS.bytes)),
+  energy: Math.max(0, numberArg(args, "--objective-lambda-energy", DEFAULT_TOPOLOGY_VERSIONED_OBJECTIVE_WEIGHTS.energy)),
+  planning: Math.max(0, numberArg(args, "--objective-lambda-planning", DEFAULT_TOPOLOGY_VERSIONED_OBJECTIVE_WEIGHTS.planning)),
+  expectedError: Math.max(0, numberArg(args, "--objective-lambda-expected-error", DEFAULT_TOPOLOGY_VERSIONED_OBJECTIVE_WEIGHTS.expectedError)),
+  aoi: Math.max(0, numberArg(args, "--objective-lambda-aoi", DEFAULT_TOPOLOGY_VERSIONED_OBJECTIVE_WEIGHTS.aoi)),
+};
+const topologyVersionedConfidenceThreshold = clamp(numberArg(args, "--objective-confidence-threshold", 0.45), 0, 1);
 const reuseOverheadPressure = numberArg(args, "--reuse-overhead-pressure", 0.5);
 const minEnergyPercent = numberArg(args, "--min-energy-percent", 20);
 const energyGuardThreshold = numberArg(args, "--energy-guard-threshold", 0.45);
@@ -4183,10 +5802,75 @@ const energyBudgetMaxReduction = clamp(numberArg(args, "--energy-budget-max-redu
 const adaptiveProbeBudgetEnabled = argValue(args, "--adaptive-probe-budget", "false").toLowerCase() === "true";
 const selectionStrategy = normalizeSelectionStrategy(argValue(args, "--selection-strategy", "int-mc-leverage"));
 const thresholdCalibrationHorizon = Math.max(0, Math.floor(numberArg(args, "--threshold-calibration-horizon", 4)));
-const predictionScoreHorizon = Math.max(1, Math.floor(numberArg(args, "--prediction-score-horizon", Math.max(1, thresholdCalibrationHorizon))));
+const predictionScoreHorizon = Math.max(1, Math.floor(numberArg(
+  args,
+  "--prediction-horizon",
+  numberArg(args, "--prediction-score-horizon", Math.max(1, thresholdCalibrationHorizon)),
+)));
 const costAwareSampling = argValue(args, "--cost-aware-sampling", "true").toLowerCase() !== "false";
 const costAwarenessWeight = clamp(numberArg(args, "--cost-awareness-weight", 0.28), 0, 1);
-const telemetryByteBudgetPerSlice = Math.max(0, numberArg(args, "--telemetry-byte-budget-per-slice", 0));
+const telemetryByteBudgetPerSlice = Math.max(0, numberArg(
+  args,
+  "--telemetry-byte-budget",
+  numberArg(args, "--telemetry-byte-budget-per-slice", 0),
+));
+const planner = argValue(args, "--planner", "legacy-int-mc").toLowerCase();
+if (!["legacy-int-mc", "topology-versioned-risk-int"].includes(planner)) {
+  throw new Error(`Unsupported planner: ${planner}`);
+}
+const topologyVersionedRiskPlannerEnabled = planner === "topology-versioned-risk-int";
+const adaptiveStructuralReuseEnabled = topologyVersionedRiskPlannerEnabled &&
+  argValue(args, "--adaptive-structural-reuse", "false").toLowerCase() === "true";
+const structuralReuseErrorTolerance = clamp(
+  numberArg(args, "--structural-reuse-error-tolerance", 0.02),
+  0,
+  0.1,
+);
+const structuralReuseSimilarityFloor = clamp(
+  numberArg(args, "--structural-reuse-similarity-floor", 0.9),
+  0.72,
+  0.94,
+);
+const structuralReuseMaximumChangedLinkRatio = clamp(
+  numberArg(args, "--structural-reuse-maximum-changed-link-ratio", 0.12),
+  0.08,
+  0.5,
+);
+const structuralReuseMaximumAffectedPathRatio = clamp(
+  numberArg(args, "--structural-reuse-maximum-affected-path-ratio", 0.25),
+  0.15,
+  0.75,
+);
+const structuralReuseMinimumValidPathRatio = clamp(
+  numberArg(args, "--structural-reuse-minimum-valid-path-ratio", 0.75),
+  0.5,
+  0.85,
+);
+const topologyVersionedRiskWeight = Math.max(0, numberArg(args, "--risk-weight", 0.35));
+const topologyVersionedRedundancyWeight = Math.max(0, numberArg(args, "--redundancy-weight", 0.3));
+const topologyVersionedPlanningCostWeight = Math.max(0, numberArg(args, "--planning-cost-weight", 0.05));
+const topologyVersionedInformationGainMode = argValue(args, "--information-gain-mode", "marginal").toLowerCase();
+if (!["marginal", "coverage-only"].includes(topologyVersionedInformationGainMode)) {
+  throw new Error(`Unsupported information gain mode: ${topologyVersionedInformationGainMode}`);
+}
+const topologyVersionedMetadataActions = new Set(
+  argValue(args, "--metadata-actions", "full,compact,selective")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => ["full", "compact", "selective"].includes(value)),
+);
+if (topologyVersionedRiskPlannerEnabled && topologyVersionedMetadataActions.size === 0) {
+  throw new Error("topology-versioned-risk-int requires at least one metadata action");
+}
+const topologyVersionedAllowedModes = new Set(
+  argValue(args, "--planner-modes", "reuse,repair,fresh")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => ["reuse", "repair", "fresh"].includes(value)),
+);
+if (topologyVersionedRiskPlannerEnabled && topologyVersionedAllowedModes.size === 0) {
+  throw new Error("topology-versioned-risk-int requires at least one planner mode");
+}
 const hopMetadataBytes = numberArg(args, "--hop-bytes", 96);
 const adaptiveMetadataProfileEnabled = argValue(args, "--adaptive-metadata-profile", adaptiveProbeBudgetEnabled ? "true" : "false").toLowerCase() === "true";
 const compactHopMetadataBytes = Math.max(16, Math.min(hopMetadataBytes, numberArg(args, "--compact-hop-bytes", Math.round(hopMetadataBytes * 0.5))));
@@ -4199,6 +5883,14 @@ const reportHeaderBytes = numberArg(args, "--report-header-bytes", 128);
 const hopProcessingJ = numberArg(args, "--hop-processing-j", 0.02);
 const reportProcessingJ = numberArg(args, "--report-processing-j", 0.05);
 const telemetryTxNjPerByte = numberArg(args, "--telemetry-tx-nj-per-byte", 120);
+const scaleAdaptiveTotalBudgetEnabled = argValue(
+  args,
+  "--scale-adaptive-total-budget",
+  "false",
+).toLowerCase() === "true";
+const scaleBudgetHeadroomRatio = clamp(numberArg(args, "--scale-budget-headroom-ratio", 0.1), 0, 1);
+const scaleBudgetPathHeadroomRatio = clamp(numberArg(args, "--scale-budget-path-headroom-ratio", 0.25), 0, 1);
+const scaleBudgetReferenceCsvPath = argValue(args, "--scale-budget-reference-csv", "");
 const predictedContactPlanPath = argValue(args, "--predicted-contact-plan", "");
 const observabilityMode = argValue(args, "--observability-mode", "oracle").toLowerCase();
 const feedbackLagSlices = Math.max(
@@ -4214,6 +5906,58 @@ const oamControlWeight = numberArg(args, "--oam-control-weight", 0.22);
 const oamReplanPressureThreshold = numberArg(args, "--oam-replan-pressure-threshold", 0.68);
 const oamControlReplanPressureThreshold = numberArg(args, "--oam-control-replan-pressure-threshold", 0.68);
 const multiObjectiveBudgetEnabled = argValue(args, "--multi-objective-budget", "false").toLowerCase() === "true";
+const importanceAwareTargetsEnabled = argValue(args, "--importance-aware-targets", "false").toLowerCase() === "true";
+const importanceMetadataOnly = argValue(args, "--importance-metadata-only", "true").toLowerCase() !== "false";
+const importanceSelectiveMetadataEnabled = importanceAwareTargetsEnabled && argValue(
+  args,
+  "--importance-selective-metadata",
+  "true",
+).toLowerCase() !== "false";
+const importancePathScoringEnabled = importanceAwareTargetsEnabled && argValue(
+  args,
+  "--importance-path-scoring",
+  importanceMetadataOnly ? "false" : "true",
+).toLowerCase() === "true";
+const importanceScoreWeight = clamp(numberArg(args, "--importance-score-weight", 0.12), 0, 0.25);
+const importanceShadowInformationFloor = clamp(numberArg(args, "--importance-shadow-information-floor", 1), 0.9, 1);
+const importanceAoIShadowInformationFloor = clamp(
+  numberArg(args, "--importance-aoi-shadow-information-floor", 1),
+  0.9,
+  1,
+);
+const importanceAoIDebtPathRatio = clamp(numberArg(args, "--importance-aoi-debt-path-ratio", 0.1), 0, 0.5);
+const importanceRepairByteBudgetRatio = clamp(numberArg(args, "--importance-repair-byte-budget-ratio", 0.15), 0, 0.5);
+const importanceBudgetNeutralReplacementEnabled = importanceAwareTargetsEnabled && argValue(
+  args,
+  "--importance-budget-neutral-replacement",
+  "false",
+).toLowerCase() === "true";
+const importanceReplacementRatio = clamp(numberArg(args, "--importance-replacement-ratio", 0.25), 0, 0.5);
+const importanceReplacementMaxBaseLossRatio = clamp(
+  numberArg(args, "--importance-replacement-max-base-loss-ratio", 0.02),
+  0,
+  0.2,
+);
+const importanceStrictForwardOnlyEnabled = importanceAwareTargetsEnabled && argValue(
+  args,
+  "--importance-strict-forward-only",
+  importanceBudgetNeutralReplacementEnabled ? "true" : "false",
+).toLowerCase() === "true";
+const importancePlaneRepresentativeRatio = clamp(
+  numberArg(args, "--importance-plane-representative-ratio", 0),
+  0,
+  1,
+);
+const importanceTargetRatio = clamp(numberArg(args, "--importance-target-ratio", 0.25), 0, 1);
+const importanceNodeTargetRatio = clamp(numberArg(args, "--importance-node-target-ratio", importanceTargetRatio), 0, 1);
+const importanceLinkTargetRatio = clamp(numberArg(args, "--importance-link-target-ratio", importanceTargetRatio), 0, 1);
+const importanceMaxAoISlices = Math.max(1, Math.floor(numberArg(args, "--importance-max-aoi-slices", 6)));
+const importanceExplorationRatio = clamp(numberArg(args, "--importance-exploration-ratio", 0.08), 0, 1);
+const importanceWindowSize = Math.max(2, Math.floor(numberArg(args, "--importance-window-size", 6)));
+
+if (importanceAwareTargetsEnabled && observabilityMode !== "oam-only") {
+  throw new Error("importance-aware telemetry requires --observability-mode oam-only to preserve the causal no-oracle boundary");
+}
 
 const linksPath = resolve(argValue(args, "--links", join(inputDir, "links.csv")));
 const nodesPath = resolve(argValue(args, "--nodes", join(inputDir, "nodes.csv")));
@@ -4235,18 +5979,34 @@ if (plannerOamLinksPath) requireFile(resolve(plannerOamLinksPath), "planner Grou
 if (plannerOamNodesPath) requireFile(resolve(plannerOamNodesPath), "planner Ground OAM nodes");
 if (oamPriorityRetestPath) requireFile(resolve(oamPriorityRetestPath), "Ground OAM priority retest feedback");
 if (oamControlActionsPath) requireFile(resolve(oamControlActionsPath), "Ground OAM control actions");
+if (scaleBudgetReferenceCsvPath) requireFile(resolve(scaleBudgetReferenceCsvPath), "scale budget reference schedule");
 
-const [links, nodes, routes, candidatePaths, predictedContactPlan, plannerOamLinks, plannerOamNodes, oamPriorityRetests, oamControlActions] = await Promise.all([
-  readCsv(linksPath),
-  existsSync(nodesPath) ? readCsv(nodesPath) : Promise.resolve([]),
-  existsSync(routesPath) ? readCsv(routesPath) : Promise.resolve([]),
-  readCsv(candidatePathsPath),
-  predictedContactPlanPath ? readJson(resolve(predictedContactPlanPath)) : Promise.resolve(null),
-  plannerOamLinksPath ? readCsv(resolve(plannerOamLinksPath)) : Promise.resolve([]),
-  plannerOamNodesPath ? readCsv(resolve(plannerOamNodesPath)) : Promise.resolve([]),
-  oamPriorityRetestPath ? readCsv(resolve(oamPriorityRetestPath)) : Promise.resolve([]),
-  oamControlActionsPath ? readCsv(resolve(oamControlActionsPath)) : Promise.resolve([]),
-]);
+// Large Starlink runs can exceed the V8 heap when all source files and their
+// intermediate parse matrices coexist. Read sequentially and retain only the
+// fields used by the causal planner.
+let links = await readCsvStream(linksPath, { columns: TRUTH_LINK_PLANNER_COLUMNS });
+let nodes = existsSync(nodesPath)
+  ? await readCsvStream(nodesPath, { columns: TRUTH_NODE_PLANNER_COLUMNS })
+  : [];
+let routes = existsSync(routesPath)
+  ? await readCsvStream(routesPath, { columns: ROUTE_PLANNER_COLUMNS })
+  : [];
+const candidatePaths = await readCsvStream(candidatePathsPath);
+const predictedContactPlan = predictedContactPlanPath
+  ? await readPredictedContactPlan(resolve(predictedContactPlanPath))
+  : null;
+let plannerOamLinks = plannerOamLinksPath
+  ? await readCsvStream(resolve(plannerOamLinksPath), { columns: OAM_LINK_PLANNER_COLUMNS })
+  : [];
+let plannerOamNodes = plannerOamNodesPath
+  ? await readCsvStream(resolve(plannerOamNodesPath), { columns: OAM_NODE_PLANNER_COLUMNS })
+  : [];
+const oamPriorityRetests = oamPriorityRetestPath ? await readCsvStream(resolve(oamPriorityRetestPath)) : [];
+const oamControlActions = oamControlActionsPath ? await readCsvStream(resolve(oamControlActionsPath)) : [];
+const scaleBudgetReferenceRows = scaleBudgetReferenceCsvPath
+  ? await readCsvStream(resolve(scaleBudgetReferenceCsvPath))
+  : [];
+const scaleBudgetReferenceBySlice = buildScaleBudgetReference(scaleBudgetReferenceRows);
 const planningLinks = buildObservablePlanningLinks({
   truthLinks: links,
   predictedPlan: predictedContactPlan,
@@ -4261,6 +6021,12 @@ const planningNodes = buildObservablePlanningNodes({
   stateLagSlices: feedbackLagSlices,
 });
 const planningRoutes = buildObservableRoutes({ routes, mode: observabilityMode });
+links = [];
+nodes = [];
+routes = [];
+plannerOamLinks = [];
+plannerOamNodes = [];
+if (predictedContactPlan?.entries) predictedContactPlan.entries = [];
 const observableOamPriorityRetests = scheduleObservableRows(buildObservableOamFeedback({
   rows: oamPriorityRetests,
   mode: observabilityMode,
@@ -4271,6 +6037,7 @@ const observableOamControlActions = scheduleObservableRows(oamControlActions, {
   targetFieldCandidates: ["next_slice_index", "target_slice_index", "slice_index"],
 });
 const linksBySlice = groupBy(planningLinks, (link) => String(link.slice_index));
+const nodesBySlice = groupBy(planningNodes, (node) => String(node.slice_index));
 const routesBySlice = groupBy(planningRoutes, (route) => String(route.slice_index));
 const pathsBySlice = groupBy(candidatePaths, (path) => String(path.slice_index));
 const linksBySliceAndId = indexBy(planningLinks, (link) => `${link.slice_index}|${link.link_id}`);
@@ -4297,6 +6064,60 @@ const causalFeedbackViolations = feedbackLagSlices < 1
     ).length + causalPlannerStateRows.filter((row) =>
       Number(row.planner_state_source_slice_index) >= Number(row.slice_index)
     ).length;
+const importanceTargetPlan = importanceAwareTargetsEnabled
+  ? buildImportanceAwareTargetPlan({
+      slices: sliceIndexes.map(Number),
+      nodes: planningNodes,
+      links: planningLinks,
+      routes: planningRoutes,
+      options: {
+        windowSize: importanceWindowSize,
+        nodeTargetRatio: importanceNodeTargetRatio,
+        linkTargetRatio: importanceLinkTargetRatio,
+        maxAoISlices: importanceMaxAoISlices,
+        explorationRatio: importanceExplorationRatio,
+      },
+    })
+  : {
+      rows: [],
+      bySlice: new Map(),
+      summary: {
+        slice_count: sliceIndexes.length,
+        target_count: 0,
+        node_target_count: 0,
+        link_target_count: 0,
+        mandatory_target_count: 0,
+        rejected_noncausal_rows: 0,
+        causal_boundary: "disabled",
+      },
+    };
+const planeRepresentativesBySlice = new Map(sliceIndexes.map((sliceIndex) => [
+  numberValue(sliceIndex),
+  buildRotatingPlaneRepresentatives({
+    nodes: nodesBySlice.get(String(sliceIndex)) ?? [],
+    sliceIndex: numberValue(sliceIndex),
+    representativeRatio: importancePlaneRepresentativeRatio,
+  }),
+]));
+function selectionImportanceTargetsForSlice(sliceIndex) {
+  const baseTargets = importanceTargetPlan.bySlice.get(numberValue(sliceIndex)) ?? [];
+  if (!importanceBudgetNeutralReplacementEnabled) return baseTargets;
+  const representatives = planeRepresentativesBySlice.get(numberValue(sliceIndex)) ?? new Set();
+  return [
+    ...baseTargets,
+    ...[...representatives].map((nodeId) => ({
+      slice_index: numberValue(sliceIndex),
+      target_type: "node",
+      target_id: nodeId,
+      importance_score: 0.2,
+      mandatory: false,
+      coverage_required: false,
+      aoi_debt_severity: 0,
+      target_class: "rotating-plane-representative",
+      reason: "orbit-plane-representative-rotation",
+    })),
+  ];
+}
 const contactPlan = buildContactPlan({
   linksBySlice,
   routesBySlice,
@@ -4310,46 +6131,272 @@ const contactPlan = buildContactPlan({
   oamControlReplanPressureThreshold,
   thresholdCalibrationHorizon,
 });
+if (scaleBudgetReferenceCsvPath) {
+  const missingSlices = contactPlan.perSlice
+    .map((slice) => String(slice.slice_index))
+    .filter((sliceIndex) => !scaleBudgetReferenceBySlice.has(sliceIndex));
+  if (missingSlices.length > 0) {
+    throw new Error(`scale budget reference is missing slices: ${missingSlices.join(", ")}`);
+  }
+}
 const leverageScores = buildLeverageScores({ linksById, sliceIndexes, rank });
 const selectedLastSeen = new Map();
+const selectedNodeLastSeen = new Map();
 const reusablePlansByClass = new Map();
+const unifiedRepairCandidateBudgetByClass = new Map();
+const reusablePlansByVersion = [];
+const unifiedStablePathCache = new Map();
 const selectedRows = [];
 const summaryRows = [];
+const importanceMandatoryTargetsBySlice = new Map();
+const importanceMetadataSummaryRows = [];
 let incrementalDeltaCandidatePaths = 0;
+const topologyVersionedObjectiveOptions = {
+  topologyVersionedObjectiveEnabled,
+  topologyVersionedObjectiveWeights,
+  topologyVersionedConfidenceThreshold,
+};
+const scaleAdaptiveBudgetOptions = {
+  scaleAdaptiveTotalBudgetEnabled,
+  scaleBudgetHeadroomRatio,
+  scaleBudgetPathHeadroomRatio,
+};
 
 contactPlan.perSlice.forEach((slicePlan, slicePosition) => {
+  const previousSlicePlan = slicePosition > 0 ? contactPlan.perSlice[slicePosition - 1] : null;
+  const previousActiveSet = previousSlicePlan?.activeSet ?? new Set();
+  const topologyAddedLinkIds = previousSlicePlan
+    ? [...slicePlan.activeSet].filter((linkId) => !previousActiveSet.has(linkId))
+    : [...slicePlan.activeSet];
+  const topologyRemovedLinkIds = previousSlicePlan
+    ? [...previousActiveSet].filter((linkId) => !slicePlan.activeSet.has(linkId))
+    : [];
+  slicePlan.unified_topology_added_link_ids = topologyAddedLinkIds.join(" > ");
+  slicePlan.unified_topology_removed_link_ids = topologyRemovedLinkIds.join(" > ");
+  const referenceScaleBudget = scaleBudgetReferenceBySlice.get(String(slicePlan.slice_index));
+  const sliceTelemetryByteBudget = referenceScaleBudget ?? telemetryByteBudgetPerSlice;
+  const sliceScaleAdaptiveBudgetOptions = {
+    ...scaleAdaptiveBudgetOptions,
+    scaleBudgetExplicitSource: referenceScaleBudget === undefined
+      ? "explicit-hard-cap"
+      : "reference-schedule-hard-cap",
+  };
   const currentCandidates = pathsBySlice.get(String(slicePlan.slice_index)) ?? [];
-  const cachedCandidates = reusablePlansByClass.get(slicePlan.topology_class_id) ?? [];
+  const classCachedCandidates = reusablePlansByClass.get(slicePlan.topology_class_id) ?? [];
+  const structuralCacheBase = topologyVersionedRiskPlannerEnabled && adaptiveReuse
+    ? selectStructuralCacheBase({
+        entries: reusablePlansByVersion,
+        currentActiveLinkIds: [...slicePlan.activeSet],
+        currentTopologySignature: slicePlan.topology_signature,
+        currentSliceIndex: slicePlan.slice_index,
+        cacheWindowSlices: windowSize,
+        adaptivePolicy: {
+          enabled: adaptiveStructuralReuseEnabled,
+          relative_error_tolerance: structuralReuseErrorTolerance,
+          minimum_similarity_floor: structuralReuseSimilarityFloor,
+          maximum_changed_link_ratio_ceiling: structuralReuseMaximumChangedLinkRatio,
+          maximum_affected_path_ratio_ceiling: structuralReuseMaximumAffectedPathRatio,
+          minimum_valid_path_ratio_floor: structuralReuseMinimumValidPathRatio,
+        },
+        forecastDriftPressure: slicePlan.topology_forecast_drift_pressure,
+        oamPressure: slicePlan.oam_replan_pressure,
+        reuseConfidence: slicePlan.topology_forecast_reuse_confidence,
+        planningOverheadPressure: reuseOverheadPressure,
+        recommendedPlanMode: slicePlan.topology_forecast_recommended_plan_mode,
+      })
+    : null;
+  const cachedCandidates = topologyVersionedRiskPlannerEnabled
+    ? structuralCacheBase?.eligible
+      ? structuralCacheBase.selected.entry.paths
+      : []
+    : classCachedCandidates;
+  const unifiedRepairCandidateBudget = topologyVersionedRiskPlannerEnabled
+    ? numberValue(structuralCacheBase?.selected?.entry?.candidate_budget, cachedCandidates.length)
+    : unifiedRepairCandidateBudgetByClass.get(slicePlan.topology_class_id) ?? cachedCandidates.length;
+  const cacheAddedLinkIds = structuralCacheBase?.eligible
+    ? structuralCacheBase.selected.added_link_ids
+    : topologyAddedLinkIds;
+  const cacheRemovedLinkIds = structuralCacheBase?.eligible
+    ? structuralCacheBase.selected.removed_link_ids
+    : topologyRemovedLinkIds;
   const useCached = adaptiveReuse && slicePlan.topology_reused_from_class && cachedCandidates.length > 0;
-  const candidateSource = useCached ? "topology-reuse-cache" : "fresh-slice-plan";
+  const unifiedCacheAvailable = topologyVersionedRiskPlannerEnabled && adaptiveReuse && cachedCandidates.length > 0;
+  const unifiedCacheImpact = structuralCacheBase?.selected?.impact ?? assessCachedPathImpact({
+    cachedPaths: cachedCandidates,
+    currentActiveLinkIds: [...slicePlan.activeSet],
+    changedLinkIds: [...cacheAddedLinkIds, ...cacheRemovedLinkIds],
+  });
+  const unifiedModePrefilter = topologyVersionedRiskPlannerEnabled
+    ? prefilterTopologyPlanningModes({
+        allowedModes: [...topologyVersionedAllowedModes],
+        cacheAvailable: unifiedCacheAvailable,
+        currentTopologySignature: slicePlan.topology_signature,
+        cachedTopologySignature: structuralCacheBase?.selected?.entry?.topology_signature ?? cachedCandidates[0]?.topology_signature ?? "",
+        addedLinkCount: cacheAddedLinkIds.length,
+        removedLinkCount: cacheRemovedLinkIds.length,
+        activeLinkCount: slicePlan.activeSet.size,
+        reuseConfidence: slicePlan.topology_forecast_reuse_confidence,
+        driftPressure: slicePlan.topology_forecast_drift_pressure,
+        recommendedPlanMode: slicePlan.topology_forecast_recommended_plan_mode,
+        oamReplanRequired: boolValue(slicePlan.oam_replan_triggered) ||
+          boolValue(slicePlan.oam_control_replan_triggered),
+        topologySimilarityScore: structuralCacheBase?.selected?.topology_similarity_score ?? slicePlan.topology_similarity_score,
+        adaptiveReuseThreshold: slicePlan.adaptive_reuse_threshold,
+        cachedPathAffectedRatio: unifiedCacheImpact.affected_cached_path_ratio,
+        cachedPathValidRatio: 1 - unifiedCacheImpact.inactive_cached_path_ratio,
+        structuralCacheGuards: structuralCacheBase?.selected?.effective_guards,
+        structuralEstimatedErrorIncrease:
+          structuralCacheBase?.selected?.estimated_relative_error_increase_proxy,
+        structuralRelativeErrorTolerance:
+          structuralCacheBase?.selected?.adaptive_assessment?.relative_error_tolerance,
+      })
+    : null;
+  const unifiedEffectiveModes = new Set(
+    unifiedModePrefilter?.selected_modes ?? [...topologyVersionedAllowedModes],
+  );
+  slicePlan.unified_mode_prefilter_policy = unifiedModePrefilter?.policy ?? "legacy";
+  slicePlan.unified_mode_prefilter_reason = unifiedModePrefilter?.reason ?? "legacy-planner";
+  slicePlan.unified_mode_prefilter_selected_modes = [...unifiedEffectiveModes].join(" > ");
+  slicePlan.unified_mode_prefilter_changed_link_ratio = unifiedModePrefilter?.changed_link_ratio ?? "";
+  slicePlan.unified_mode_prefilter_rejection_reasons = (unifiedModePrefilter?.rejection_reasons ?? []).join(" > ");
+  slicePlan.unified_structural_cache_source_slice = structuralCacheBase?.selected?.slice_index ?? "";
+  slicePlan.unified_structural_cache_age_slices = structuralCacheBase?.selected?.age_slices ?? "";
+  slicePlan.unified_structural_cache_similarity = structuralCacheBase?.selected?.topology_similarity_score ?? "";
+  slicePlan.unified_structural_cache_eligible = Boolean(structuralCacheBase?.eligible);
+  slicePlan.unified_structural_cache_rejection_reasons = (structuralCacheBase?.rejection_reasons ?? []).join(" > ");
+  slicePlan.unified_structural_cache_adaptive_enabled = Boolean(
+    structuralCacheBase?.selected?.adaptive_assessment?.enabled,
+  );
+  slicePlan.unified_structural_cache_adaptive_policy =
+    structuralCacheBase?.selected?.adaptive_assessment?.policy ?? "";
+  slicePlan.unified_structural_cache_adaptive_reason =
+    structuralCacheBase?.selected?.adaptive_assessment?.reason ?? "";
+  slicePlan.unified_structural_cache_error_tolerance =
+    structuralCacheBase?.selected?.adaptive_assessment?.relative_error_tolerance ?? 0;
+  slicePlan.unified_structural_cache_estimated_error_increase_proxy =
+    structuralCacheBase?.selected?.estimated_relative_error_increase_proxy ?? 0;
+  slicePlan.unified_structural_cache_error_tolerance_utilization =
+    structuralCacheBase?.selected?.error_tolerance_utilization ?? 0;
+  slicePlan.unified_structural_cache_relaxation_factor =
+    structuralCacheBase?.selected?.adaptive_assessment?.relaxation_factor ?? 0;
+  slicePlan.unified_structural_cache_risk_pressure =
+    structuralCacheBase?.selected?.adaptive_assessment?.risk_pressure ?? 0;
+  slicePlan.unified_structural_cache_effective_similarity_threshold =
+    structuralCacheBase?.selected?.effective_guards?.minimum_similarity ?? "";
+  slicePlan.unified_structural_cache_effective_changed_link_limit =
+    structuralCacheBase?.selected?.effective_guards?.maximum_changed_link_ratio ?? "";
+  slicePlan.unified_structural_cache_effective_affected_path_limit =
+    structuralCacheBase?.selected?.effective_guards?.maximum_affected_path_ratio ?? "";
+  slicePlan.unified_structural_cache_effective_valid_path_floor =
+    structuralCacheBase?.selected?.effective_guards?.minimum_valid_path_ratio ?? "";
+  slicePlan.unified_cached_path_count = unifiedCacheImpact.cached_path_count;
+  slicePlan.unified_affected_cached_path_count = unifiedCacheImpact.affected_cached_path_count;
+  slicePlan.unified_affected_cached_path_ratio = unifiedCacheImpact.affected_cached_path_ratio;
+  slicePlan.unified_inactive_cached_path_count = unifiedCacheImpact.inactive_cached_path_count;
+  slicePlan.unified_retained_cached_path_count = unifiedCacheImpact.retained_cached_path_count;
+  const candidateSource = topologyVersionedRiskPlannerEnabled
+    ? "unified-topology-version-candidate-pool"
+    : useCached
+      ? "topology-reuse-cache"
+      : "fresh-slice-plan";
   const mandatoryTargets = oamMandatoryTargetsForSlice({
     sliceIndex: slicePlan.slice_index,
     oamFeedbackBySlice,
     oamControlBySlice,
   });
-  const baseCandidateRows = (useCached ? cachedCandidates : currentCandidates).map((path) =>
-    adaptCandidatePath(path, slicePlan, candidateSource),
-  );
-  const candidateRows = useCached && incrementalTopologyRepair
-    ? appendOamDeltaCandidates({
-        cachedRows: baseCandidateRows,
-        currentCandidates,
-        slicePlan,
-        targets: mandatoryTargets,
-      })
-    : baseCandidateRows;
+  importanceMandatoryTargetsBySlice.set(numberValue(slicePlan.slice_index), mandatoryTargets);
+  let baseCandidateRows;
+  let candidateRows;
+  if (topologyVersionedRiskPlannerEnabled) {
+    const modeRows = [];
+    if (unifiedEffectiveModes.has("fresh")) {
+      modeRows.push(...currentCandidates.map((path) => ({
+        ...adaptCandidatePath(path, slicePlan, "fresh-slice-plan"),
+        unified_planning_mode: "fresh",
+      })));
+    }
+    if (unifiedCacheAvailable && unifiedEffectiveModes.has("reuse")) {
+      modeRows.push(...cachedCandidates.map((path) => ({
+        ...adaptCandidatePath(path, slicePlan, "topology-reuse-cache"),
+        unified_planning_mode: "reuse",
+      })));
+    }
+    if (unifiedCacheAvailable && incrementalTopologyRepair && unifiedEffectiveModes.has("repair")) {
+      const guardedStructuralRepair = slicePlan.unified_mode_prefilter_policy === "repair-guarded-structural-cache";
+      const repairWithDelta = guardedStructuralRepair
+        ? currentCandidates.map((path) => ({
+            ...adaptCandidatePath(path, slicePlan, "topology-structural-cache-dynamic-rescore"),
+            unified_planning_mode: "repair",
+            unified_fast_repair_no_reroute: true,
+            unified_structural_cache_dynamic_rescore: true,
+          }))
+        : appendTopologyRepairDeltaCandidates({
+            cachedRows: cachedCandidates.map((path) => ({
+              ...adaptCandidatePath(path, slicePlan, "topology-reuse-cache-local-repair"),
+              unified_planning_mode: "repair",
+              unified_fast_repair_no_reroute: true,
+            })),
+            currentCandidates,
+            slicePlan,
+            targets: mandatoryTargets,
+            changedLinkIds: cacheAddedLinkIds,
+            candidateBudget: unifiedRepairCandidateBudget,
+          }).map((path) => ({
+            ...path,
+            reused_candidate_source: "topology-reuse-cache-local-repair",
+            unified_planning_mode: "repair",
+          }));
+      modeRows.push(...repairWithDelta);
+    }
+    if (modeRows.length === 0 && topologyVersionedAllowedModes.has("fresh")) {
+      slicePlan.unified_mode_prefilter_policy = "fresh-empty-prefilter-fallback";
+      slicePlan.unified_mode_prefilter_reason = "prefiltered-mode-produced-no-candidates";
+      slicePlan.unified_mode_prefilter_selected_modes = "fresh";
+      modeRows.push(...currentCandidates.map((path) => ({
+        ...adaptCandidatePath(path, slicePlan, "fresh-slice-plan"),
+        unified_planning_mode: "fresh",
+      })));
+    }
+    const seen = new Set();
+    candidateRows = modeRows.filter((row) => {
+      const key = `${row.unified_planning_mode}|${candidateIdentity(row)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    baseCandidateRows = candidateRows;
+  } else {
+    baseCandidateRows = (useCached ? cachedCandidates : currentCandidates).map((path) =>
+      adaptCandidatePath(path, slicePlan, candidateSource),
+    );
+    candidateRows = useCached && incrementalTopologyRepair
+      ? appendOamDeltaCandidates({
+          cachedRows: baseCandidateRows,
+          currentCandidates,
+          slicePlan,
+          targets: mandatoryTargets,
+        })
+      : baseCandidateRows;
+  }
   incrementalDeltaCandidatePaths += candidateRows.filter(
-    (row) => row.reused_candidate_source === "topology-reuse-cache-oam-delta",
+    (row) => ["topology-reuse-cache-oam-delta", "topology-reuse-cache-local-delta"].includes(row.reused_candidate_source),
   ).length;
   let result = selectSlicePaths({
     slicePosition,
     slicePlan,
     candidatePaths: candidateRows,
+    unifiedStablePathCache,
+    unifiedRepairFallbackCandidates: currentCandidates.map((path) => ({
+      ...adaptCandidatePath(path, slicePlan, "topology-reuse-cache-representative-refresh"),
+      unified_planning_mode: "repair",
+    })),
+    unifiedRepairCandidateBudget,
     linksBySliceAndId,
     nodesBySliceAndId,
     leverageScores,
     forecastBySliceAndLink,
     selectedLastSeen,
+    selectedNodeLastSeen,
     algorithm,
     samplingRate,
     targetActiveLinkSamplingRate,
@@ -4373,7 +6420,7 @@ contactPlan.perSlice.forEach((slicePlan, slicePosition) => {
     predictionScoreHorizon,
     costAwareSampling,
     costAwarenessWeight,
-    telemetryByteBudgetPerSlice,
+    telemetryByteBudgetPerSlice: sliceTelemetryByteBudget,
     hopMetadataBytes,
     adaptiveMetadataProfileEnabled,
     compactHopMetadataBytes,
@@ -4386,6 +6433,20 @@ contactPlan.perSlice.forEach((slicePlan, slicePosition) => {
     hopProcessingJ,
     reportProcessingJ,
     telemetryTxNjPerByte,
+    importancePathScoringEnabled,
+    importanceTargets: importancePathScoringEnabled
+      ? selectionImportanceTargetsForSlice(slicePlan.slice_index)
+      : [],
+    importanceScoreWeight,
+    importanceShadowInformationFloor,
+    importanceAoIShadowInformationFloor,
+    importanceAoIDebtPathRatio,
+    importanceRepairByteBudgetRatio,
+    importanceBudgetNeutralReplacementEnabled,
+    importanceReplacementRatio,
+    importanceReplacementMaxBaseLossRatio,
+    ...sliceScaleAdaptiveBudgetOptions,
+    ...topologyVersionedObjectiveOptions,
   });
   const mandatoryCoverage = oamMandatoryCoverageForRows(result.rows, mandatoryTargets);
   const candidateMandatoryCoverage = oamMandatoryCoverageForRows(candidateRows, mandatoryTargets);
@@ -4407,11 +6468,13 @@ contactPlan.perSlice.forEach((slicePlan, slicePosition) => {
         oam_mandatory_coverage_missing_node_targets: mandatoryCoverage.missing_nodes,
       },
       candidatePaths: currentCandidates.map((path) => adaptCandidatePath(path, slicePlan, "fresh-slice-plan-oam-mandatory")),
+      unifiedStablePathCache,
       linksBySliceAndId,
       nodesBySliceAndId,
       leverageScores,
       forecastBySliceAndLink,
       selectedLastSeen,
+      selectedNodeLastSeen,
       algorithm,
       samplingRate,
       targetActiveLinkSamplingRate,
@@ -4435,7 +6498,7 @@ contactPlan.perSlice.forEach((slicePlan, slicePosition) => {
       predictionScoreHorizon,
       costAwareSampling,
       costAwarenessWeight,
-      telemetryByteBudgetPerSlice,
+      telemetryByteBudgetPerSlice: sliceTelemetryByteBudget,
       hopMetadataBytes,
       adaptiveMetadataProfileEnabled,
       compactHopMetadataBytes,
@@ -4448,7 +6511,21 @@ contactPlan.perSlice.forEach((slicePlan, slicePosition) => {
       hopProcessingJ,
       reportProcessingJ,
       telemetryTxNjPerByte,
+      importancePathScoringEnabled,
+      importanceTargets: importancePathScoringEnabled
+        ? selectionImportanceTargetsForSlice(slicePlan.slice_index)
+        : [],
+      importanceScoreWeight,
+      importanceShadowInformationFloor,
+      importanceAoIShadowInformationFloor,
+      importanceAoIDebtPathRatio,
+      importanceRepairByteBudgetRatio,
+      importanceBudgetNeutralReplacementEnabled,
+      importanceReplacementRatio,
+      importanceReplacementMaxBaseLossRatio,
       multiObjectiveBudgetEnabled,
+      ...sliceScaleAdaptiveBudgetOptions,
+      ...topologyVersionedObjectiveOptions,
     });
   }
   if (useCached && result.rows.length === 0 && currentCandidates.length > 0) {
@@ -4459,11 +6536,13 @@ contactPlan.perSlice.forEach((slicePlan, slicePosition) => {
         topology_reuse_decision: "reuse-failed-fresh-replan",
       },
       candidatePaths: currentCandidates.map((path) => adaptCandidatePath(path, slicePlan, "fresh-slice-plan-fallback")),
+      unifiedStablePathCache,
       linksBySliceAndId,
       nodesBySliceAndId,
       leverageScores,
       forecastBySliceAndLink,
       selectedLastSeen,
+      selectedNodeLastSeen,
       algorithm,
       samplingRate,
       targetActiveLinkSamplingRate,
@@ -4487,7 +6566,7 @@ contactPlan.perSlice.forEach((slicePlan, slicePosition) => {
       predictionScoreHorizon,
       costAwareSampling,
       costAwarenessWeight,
-      telemetryByteBudgetPerSlice,
+      telemetryByteBudgetPerSlice: sliceTelemetryByteBudget,
       hopMetadataBytes,
       adaptiveMetadataProfileEnabled,
       compactHopMetadataBytes,
@@ -4500,7 +6579,64 @@ contactPlan.perSlice.forEach((slicePlan, slicePosition) => {
       hopProcessingJ,
       reportProcessingJ,
       telemetryTxNjPerByte,
+      importancePathScoringEnabled,
+      importanceTargets: importancePathScoringEnabled
+        ? selectionImportanceTargetsForSlice(slicePlan.slice_index)
+        : [],
+      importanceScoreWeight,
+      importanceShadowInformationFloor,
+      importanceAoIShadowInformationFloor,
+      importanceAoIDebtPathRatio,
+      importanceRepairByteBudgetRatio,
+      importanceBudgetNeutralReplacementEnabled,
+      importanceReplacementRatio,
+      importanceReplacementMaxBaseLossRatio,
       multiObjectiveBudgetEnabled,
+      ...sliceScaleAdaptiveBudgetOptions,
+      ...topologyVersionedObjectiveOptions,
+    });
+  }
+  if (importanceAwareTargetsEnabled && importanceSelectiveMetadataEnabled) {
+    const attached = attachImportanceAwareMetadataPlans({
+      rows: result.rows,
+      targetsBySlice: importanceTargetPlan.bySlice,
+      mandatoryTargetsBySlice: importanceMandatoryTargetsBySlice,
+      representativeNodesBySlice: planeRepresentativesBySlice,
+      // Keep one causal core observation for every newly encountered node. Strict
+      // forward-only applies only after both the node and its local link state have
+      // already been observed in this slice; it must not create a node-state blind spot.
+      preserveCoreNodeCoverage: true,
+      // The compact core profile keeps every reconstruction field. Only repeated
+      // observations are omitted; first observations are never downgraded to a
+      // partial feature vector that could bias multimetric completion.
+      preserveCoreLinkMetrics: true,
+      preserveAdjacentLinkCoverage: true,
+      preserveNonTargetLinks: true,
+      preserveEndpointNodeCoverage: importanceStrictForwardOnlyEnabled,
+    });
+    result = {
+      ...result,
+      rows: attached.rows,
+      summary: result.summary
+        ? {
+            ...result.summary,
+            importance_aware_targets_enabled: true,
+            importance_metadata_only: importanceMetadataOnly,
+            importance_selective_metadata_enabled: true,
+            importance_metadata_bytes: attached.summary.metadata_bytes,
+            importance_target_mask_bytes: attached.summary.target_mask_bytes,
+            importance_saved_payload_bytes: attached.summary.saved_payload_bytes,
+            importance_target_hits: attached.summary.target_hits,
+            importance_mandatory_target_hits: attached.summary.mandatory_target_hits,
+            importance_plane_representative_hops: attached.summary.plane_representative_hops,
+            importance_forward_only_hops: attached.summary.forward_only_hops,
+            importance_node_state_omitted_hops: attached.summary.node_state_omitted_hops,
+          }
+        : result.summary,
+    };
+    importanceMetadataSummaryRows.push({
+      slice_index: slicePlan.slice_index,
+      ...attached.summary,
     });
   }
   selectedRows.push(...result.rows);
@@ -4509,7 +6645,21 @@ contactPlan.perSlice.forEach((slicePlan, slicePosition) => {
       ...row,
       source_candidate_probe_id: row.source_candidate_probe_id || row.probe_id,
     }));
-    if (reusableRows.length > 0) reusablePlansByClass.set(slicePlan.topology_class_id, reusableRows);
+    if (reusableRows.length > 0) {
+      reusablePlansByClass.set(slicePlan.topology_class_id, reusableRows);
+      if (!unifiedRepairCandidateBudgetByClass.has(slicePlan.topology_class_id)) {
+        unifiedRepairCandidateBudgetByClass.set(slicePlan.topology_class_id, reusableRows.length);
+      }
+      reusablePlansByVersion.push({
+        slice_index: numberValue(slicePlan.slice_index),
+        topology_class_id: slicePlan.topology_class_id,
+        topology_signature: slicePlan.topology_signature,
+        active_link_ids: [...slicePlan.activeSet],
+        paths: reusableRows,
+        candidate_budget: reusableRows.length,
+      });
+      while (reusablePlansByVersion.length > Math.max(1, windowSize)) reusablePlansByVersion.shift();
+    }
     summaryRows.push(result.summary);
   }
 });
@@ -4531,6 +6681,12 @@ const samplingMaskRows = buildSamplingMask({
   selectionStrategy,
   predictionScoreHorizon,
 });
+const unifiedPrefilterRejectionReasonCounts = summaryRows.reduce((counts, row) => {
+  splitPath(row.unified_mode_prefilter_rejection_reasons).forEach((reason) => {
+    counts[reason] = (counts[reason] ?? 0) + 1;
+  });
+  return counts;
+}, {});
 const activeSamplingMaskRows = samplingMaskRows.filter((row) => row.active_mask_value === 1);
 const sampledActiveSamplingMaskRows = samplingMaskRows.filter((row) => row.sampling_mask_value === 1);
 const duplicateSamplingObservations = sampledActiveSamplingMaskRows.reduce((total, row) => total + Math.max(0, numberValue(row.selected_probe_count) - 1), 0);
@@ -4553,7 +6709,9 @@ const report = {
   },
   planning_algorithm: algorithm,
   method: {
-    origin: "INT-MC path leverage sampling adapted for predictable LEO contact plans",
+    origin: topologyVersionedRiskPlannerEnabled
+      ? "topology-versioned, risk-aware, unit-cost information-gain active telemetry for LEO"
+      : "INT-MC path leverage sampling adapted for predictable LEO contact plans",
     satellite_adaptations: [
       "contact-plan topology classes from active link masks",
       "predicted contact plan uses first-stage orbital and link-budget parameters instead of business load state",
@@ -4570,6 +6728,8 @@ const report = {
       "standard low-rank row leverage is computed from a link-by-time-metadata matrix",
       "explicit greedy marginal information gain discounts links similar to already selected links",
       "path score is reported as Score(P)=marginal information gain divided by telemetry KB",
+      "topology-versioned objective jointly evaluates predicted risk, uncertainty, metadata yield, telemetry bytes, energy, planning cost, expected reconstruction error and state age",
+      "conservative objective gate falls back to the legacy ranking when evidence confidence is low and bounds every ranking adjustment",
       "cost-aware sampling estimates per-probe INT bytes and telemetry energy before ranking low-overhead paths",
       "optional per-slice telemetry byte budget suppresses noncritical probes while allowing critical coverage overrides",
       "route-path similarity included in topology reuse decisions",
@@ -4588,6 +6748,19 @@ const report = {
       "local path repair when a predicted contact gap invalidates an old candidate route",
       "normalized planning-cost accounting estimates the benefit of topology reuse versus full per-slice replanning",
       "path selection runs on ground-side planning data, not on satellites",
+      ...(topologyVersionedRiskPlannerEnabled ? [
+        "reuse, repair and fresh plans compete under the same immutable per-slice byte cap",
+        "optional error-budgeted adaptive structural guards relax topology reuse only when causal OAM, forecast, cache-age and path-validity risk leave sufficient tolerance",
+        "risk is a positive sampling value for uncertain objects that may soon become unavailable",
+        "full, compact and selective per-hop metadata are explicit actions in the same budgeted optimization",
+        "selective actions emit executable forward-only hop masks instead of accounting-only compression",
+        "no OAM, coverage or risk condition can override the hard telemetry byte budget",
+      ] : []),
+      ...(importanceAwareTargetsEnabled ? [
+        "causal rolling importance targets combine lagged OAM uncertainty, state age, volatility, known workload, predictable contact risk and exploration fairness",
+        "per-hop selective metadata masks let pure transit satellites forward probes without exposing unrequested node or link state",
+        "target-mask bytes and delivered field bytes are explicitly accounted instead of treating metadata compression as accounting-only",
+      ] : []),
     ],
     planning_overhead_model: {
       unit: "relative-normalized-planning-cost",
@@ -4597,10 +6770,21 @@ const report = {
     },
     mininet_code_not_ported: true,
     uses_predicted_contact_plan: Boolean(predictedContactPlan),
-    mechanism_flags: {
+      mechanism_flags: {
+        unified_planner: topologyVersionedRiskPlannerEnabled,
+      adaptive_structural_reuse: adaptiveStructuralReuseEnabled,
+      structural_reuse_error_tolerance: structuralReuseErrorTolerance,
       adaptive_reuse: adaptiveReuse,
       incremental_topology_repair: incrementalTopologyRepair,
       forecast_risk_scoring: forecastRiskScoring,
+      topology_versioned_objective: topologyVersionedObjectiveEnabled,
+      importance_aware_targets: importanceAwareTargetsEnabled,
+      importance_metadata_only: importanceMetadataOnly,
+      importance_path_scoring: importancePathScoringEnabled,
+      importance_selective_metadata: importanceSelectiveMetadataEnabled,
+      importance_budget_neutral_replacement: importanceBudgetNeutralReplacementEnabled,
+      importance_strict_forward_only: importanceStrictForwardOnlyEnabled,
+      scale_adaptive_total_budget: scaleAdaptiveTotalBudgetEnabled,
     },
     observability_mode: observabilityMode,
     feedback_lag_slices: feedbackLagSlices,
@@ -4609,6 +6793,13 @@ const report = {
     planner_dynamic_state_source: observabilityMode === "oam-only" ? "lagged-ground-oam-estimates" : "stage1-input",
   },
   parameters: {
+    planner,
+    topology_versioned_risk_weight: topologyVersionedRiskWeight,
+    topology_versioned_redundancy_weight: topologyVersionedRedundancyWeight,
+    topology_versioned_planning_cost_weight: topologyVersionedPlanningCostWeight,
+    topology_versioned_information_gain_mode: topologyVersionedInformationGainMode,
+    topology_versioned_metadata_actions: [...topologyVersionedMetadataActions],
+    topology_versioned_allowed_modes: [...topologyVersionedAllowedModes],
     observability_mode: observabilityMode,
     feedback_lag_slices: feedbackLagSlices,
     sampling_rate: samplingRate,
@@ -4624,11 +6815,17 @@ const report = {
     adaptive_reuse_enabled: adaptiveReuse,
     incremental_topology_repair_enabled: incrementalTopologyRepair,
     forecast_risk_scoring_enabled: forecastRiskScoring,
+    topology_versioned_objective_enabled: topologyVersionedObjectiveEnabled,
+    topology_versioned_objective_weights: topologyVersionedObjectiveWeights,
+    topology_versioned_confidence_threshold: topologyVersionedConfidenceThreshold,
     threshold_calibration_horizon_slices: thresholdCalibrationHorizon,
     prediction_score_horizon_slices: predictionScoreHorizon,
     cost_aware_sampling_enabled: costAwareSampling,
     cost_awareness_weight: costAwarenessWeight,
     telemetry_byte_budget_per_slice: telemetryByteBudgetPerSlice,
+    scale_adaptive_total_budget_enabled: scaleAdaptiveTotalBudgetEnabled,
+    scale_budget_headroom_ratio: scaleBudgetHeadroomRatio,
+    scale_budget_path_headroom_ratio: scaleBudgetPathHeadroomRatio,
     hop_metadata_bytes: hopMetadataBytes,
     adaptive_metadata_profile_enabled: adaptiveMetadataProfileEnabled,
     compact_hop_metadata_bytes: compactHopMetadataBytes,
@@ -4653,6 +6850,25 @@ const report = {
     oam_control_weight: oamControlWeight,
     oam_control_action_slices: oamControlBySlice.size,
     oam_control_replan_pressure_threshold: oamControlReplanPressureThreshold,
+    importance_aware_targets_enabled: importanceAwareTargetsEnabled,
+    importance_metadata_only: importanceMetadataOnly,
+    importance_selective_metadata_enabled: importanceSelectiveMetadataEnabled,
+    importance_path_scoring_enabled: importancePathScoringEnabled,
+    importance_score_weight: importanceScoreWeight,
+    importance_shadow_information_floor: importanceShadowInformationFloor,
+    importance_aoi_shadow_information_floor: importanceAoIShadowInformationFloor,
+    importance_aoi_debt_path_ratio: importanceAoIDebtPathRatio,
+    importance_repair_byte_budget_ratio: importanceRepairByteBudgetRatio,
+    importance_budget_neutral_replacement_enabled: importanceBudgetNeutralReplacementEnabled,
+    importance_replacement_ratio: importanceReplacementRatio,
+    importance_replacement_max_base_loss_ratio: importanceReplacementMaxBaseLossRatio,
+    importance_strict_forward_only_enabled: importanceStrictForwardOnlyEnabled,
+    importance_plane_representative_ratio: importancePlaneRepresentativeRatio,
+    importance_node_target_ratio: importanceNodeTargetRatio,
+    importance_link_target_ratio: importanceLinkTargetRatio,
+    importance_max_aoi_slices: importanceMaxAoISlices,
+    importance_exploration_ratio: importanceExplorationRatio,
+    importance_window_size: importanceWindowSize,
     prediction_horizon_slices: predictedContactPlan?.engineering_parameters?.prediction_horizon_slices ?? null,
     refresh_slices: predictedContactPlan?.engineering_parameters?.refresh_slices ?? null,
     completion_window_slices: predictedContactPlan?.engineering_parameters?.completion_window_slices ?? null,
@@ -4670,7 +6886,109 @@ const report = {
     causal_feedback_rows: causalFeedbackRows.length,
     causal_planner_state_rows: causalPlannerStateRows.length,
     causal_feedback_violations: causalFeedbackViolations,
+    importance_rejected_noncausal_rows: importanceTargetPlan.summary.rejected_noncausal_rows,
+    importance_target_count: importanceTargetPlan.summary.target_count,
+    importance_node_target_count: importanceTargetPlan.summary.node_target_count,
+    importance_link_target_count: importanceTargetPlan.summary.link_target_count,
+    importance_mandatory_target_count: importanceTargetPlan.summary.mandatory_target_count,
+    importance_path_scoring_enabled: importancePathScoringEnabled,
+    importance_score_weight: importanceScoreWeight,
+    importance_base_selected_paths: summaryRows.reduce((sum, row) => sum + numberValue(row.importance_base_selected_paths), 0),
+    importance_budget_neutral_replacements: summaryRows.reduce(
+      (sum, row) => sum + numberValue(row.importance_budget_neutral_replacements),
+      0,
+    ),
+    importance_budget_neutral_path_count_violations: summaryRows.filter(
+      (row) => row.importance_budget_neutral_path_count_preserved === false ||
+        String(row.importance_budget_neutral_path_count_preserved).toLowerCase() === "false"
+    ).length,
+    importance_additive_repair_paths: summaryRows.reduce((sum, row) => sum + numberValue(row.importance_additive_repair_paths), 0),
+    importance_additive_repair_byte_budget: round(summaryRows.reduce(
+      (sum, row) => sum + numberValue(row.importance_additive_repair_byte_budget),
+      0,
+    )),
+    importance_additive_repair_estimated_bytes: round(summaryRows.reduce(
+      (sum, row) => sum + numberValue(row.importance_additive_repair_estimated_bytes),
+      0,
+    )),
+    importance_path_covered_targets: summaryRows.reduce((sum, row) => sum + numberValue(row.importance_covered_targets), 0),
+    importance_path_target_coverage: round(
+      summaryRows.reduce((sum, row) => sum + numberValue(row.importance_covered_targets), 0) /
+      Math.max(summaryRows.reduce((sum, row) => sum + numberValue(row.importance_targets), 0), 1),
+    ),
+    importance_metadata_bytes: round(importanceMetadataSummaryRows.reduce((sum, row) => sum + numberValue(row.metadata_bytes), 0)),
+    importance_target_mask_bytes: round(importanceMetadataSummaryRows.reduce((sum, row) => sum + numberValue(row.target_mask_bytes), 0)),
+    importance_saved_payload_bytes: round(importanceMetadataSummaryRows.reduce((sum, row) => sum + numberValue(row.saved_payload_bytes), 0)),
+    importance_target_hits: importanceMetadataSummaryRows.reduce((sum, row) => sum + numberValue(row.target_hits), 0),
+    importance_mandatory_target_hits: importanceMetadataSummaryRows.reduce((sum, row) => sum + numberValue(row.mandatory_target_hits), 0),
+    importance_plane_representative_hops: importanceMetadataSummaryRows.reduce(
+      (sum, row) => sum + numberValue(row.plane_representative_hops),
+      0,
+    ),
+    importance_forward_only_hops: importanceMetadataSummaryRows.reduce(
+      (sum, row) => sum + numberValue(row.forward_only_hops),
+      0,
+    ),
+    importance_node_state_omitted_hops: importanceMetadataSummaryRows.reduce(
+      (sum, row) => sum + numberValue(row.node_state_omitted_hops),
+      0,
+    ),
     selected_paths: selectedRows.length,
+    unified_planner_enabled: topologyVersionedRiskPlannerEnabled,
+    unified_reuse_slices: summaryRows.filter((row) => row.unified_planner_selected_mode === "reuse").length,
+    unified_repair_slices: summaryRows.filter((row) => row.unified_planner_selected_mode === "repair").length,
+    unified_fresh_slices: summaryRows.filter((row) => row.unified_planner_selected_mode === "fresh").length,
+    unified_full_actions: summaryRows.reduce((sum, row) => sum + numberValue(row.unified_planner_full_actions), 0),
+    unified_compact_actions: summaryRows.reduce((sum, row) => sum + numberValue(row.unified_planner_compact_actions), 0),
+    unified_selective_actions: summaryRows.reduce((sum, row) => sum + numberValue(row.unified_planner_selective_actions), 0),
+    unified_forward_only_hops: summaryRows.reduce((sum, row) => sum + numberValue(row.unified_planner_forward_only_hops), 0),
+    unified_hard_budget_violations: summaryRows.reduce((sum, row) => sum + numberValue(row.unified_planner_budget_violations), 0),
+    unified_mode_prefilter_reuse_slices: summaryRows.filter((row) => row.unified_mode_prefilter_selected_modes === "reuse").length,
+    unified_mode_prefilter_repair_slices: summaryRows.filter((row) => row.unified_mode_prefilter_selected_modes === "repair").length,
+    unified_mode_prefilter_fresh_slices: summaryRows.filter((row) => row.unified_mode_prefilter_selected_modes === "fresh").length,
+    unified_mode_prefilter_ambiguous_slices: summaryRows.filter((row) => String(row.unified_mode_prefilter_selected_modes).includes(" > ")).length,
+    unified_mode_prefilter_rejection_reason_counts: unifiedPrefilterRejectionReasonCounts,
+    unified_cached_path_entries: summaryRows.reduce((sum, row) => sum + numberValue(row.unified_cached_path_count), 0),
+    unified_affected_cached_path_entries: summaryRows.reduce((sum, row) => sum + numberValue(row.unified_affected_cached_path_count), 0),
+    unified_inactive_cached_path_entries: summaryRows.reduce((sum, row) => sum + numberValue(row.unified_inactive_cached_path_count), 0),
+    unified_retained_cached_path_entries: summaryRows.reduce((sum, row) => sum + numberValue(row.unified_retained_cached_path_count), 0),
+    unified_adaptive_structural_cache_slices: summaryRows.filter(
+      (row) => row.unified_structural_cache_adaptive_enabled === true,
+    ).length,
+    mean_unified_structural_cache_error_tolerance: round(mean(
+      summaryRows.map((row) => numberValue(row.unified_structural_cache_error_tolerance, NaN)).filter(Number.isFinite),
+    )),
+    mean_unified_structural_cache_estimated_error_increase_proxy: round(mean(
+      summaryRows
+        .filter((row) => numberValue(row.unified_cached_path_count) > 0)
+        .map((row) => numberValue(row.unified_structural_cache_estimated_error_increase_proxy, NaN))
+        .filter(Number.isFinite),
+    )),
+    mean_unified_structural_cache_effective_similarity_threshold: round(mean(
+      summaryRows
+        .map((row) => numberValue(row.unified_structural_cache_effective_similarity_threshold, NaN))
+        .filter(Number.isFinite),
+    )),
+    mean_unified_structural_cache_relaxation_factor: round(mean(
+      summaryRows.map((row) => numberValue(row.unified_structural_cache_relaxation_factor, NaN)).filter(Number.isFinite),
+    )),
+    mean_unified_structural_cache_risk_pressure: round(mean(
+      summaryRows.map((row) => numberValue(row.unified_structural_cache_risk_pressure, NaN)).filter(Number.isFinite),
+    )),
+    mean_unified_affected_cached_path_ratio: round(mean(
+      summaryRows
+        .filter((row) => numberValue(row.unified_cached_path_count) > 0)
+        .map((row) => numberValue(row.unified_affected_cached_path_ratio)),
+    )),
+    unified_planner_marginal_evaluations: summaryRows.reduce((sum, row) => sum + numberValue(row.unified_planner_marginal_evaluations), 0),
+    unified_planner_score_cache_hits: summaryRows.reduce((sum, row) => sum + numberValue(row.unified_planner_score_cache_hits), 0),
+    unified_planner_score_cache_recomputations: summaryRows.reduce((sum, row) => sum + numberValue(row.unified_planner_score_cache_recomputations), 0),
+    unified_stable_path_cache_hits: summaryRows.reduce((sum, row) => sum + numberValue(row.unified_stable_path_cache_hits), 0),
+    unified_stable_path_cache_misses: summaryRows.reduce((sum, row) => sum + numberValue(row.unified_stable_path_cache_misses), 0),
+    unified_repair_refill_paths: summaryRows.reduce((sum, row) => sum + numberValue(row.unified_repair_refill_paths), 0),
+    mean_unified_plan_objective: round(mean(summaryRows.map((row) => numberValue(row.unified_planner_plan_objective, NaN)).filter(Number.isFinite))),
+    mean_unified_information_gain: round(mean(summaryRows.map((row) => numberValue(row.unified_planner_information_gain, NaN)).filter(Number.isFinite))),
+    mean_unified_risk_gain: round(mean(summaryRows.map((row) => numberValue(row.unified_planner_risk_gain, NaN)).filter(Number.isFinite))),
     sampling_mask_rows: samplingMaskRows.length,
     active_sampling_mask_rows: activeSamplingMaskRows.length,
     sampled_active_sampling_mask_rows: sampledActiveSamplingMaskRows.length,
@@ -4683,9 +7001,9 @@ const report = {
     mean_selected_paths_per_slice: round(mean(summaryRows.map((row) => row.selected_paths))),
     repaired_candidate_paths: summaryRows.reduce((total, row) => total + numberValue(row.repaired_candidate_paths), 0),
     selected_repaired_paths: summaryRows.reduce((total, row) => total + numberValue(row.selected_repaired_paths), 0),
-    reused_slice_plans: summaryRows.filter((row) => row.candidate_source === "topology-reuse-cache").length,
-    fresh_slice_plans: summaryRows.filter((row) => row.candidate_source !== "topology-reuse-cache").length,
-    estimated_full_replanning_avoided: summaryRows.filter((row) => row.candidate_source === "topology-reuse-cache").length,
+    reused_slice_plans: summaryRows.filter((row) => String(row.candidate_source).startsWith("topology-reuse-cache")).length,
+    fresh_slice_plans: summaryRows.filter((row) => !String(row.candidate_source).startsWith("topology-reuse-cache")).length,
+    estimated_full_replanning_avoided: summaryRows.filter((row) => String(row.candidate_source).startsWith("topology-reuse-cache")).length,
     planning_cache_hit_slices: summaryRows.filter((row) => row.planning_cache_hit === true).length,
     planning_cache_miss_slices: summaryRows.filter((row) => row.planning_cache_hit !== true).length,
     planning_local_repair_slices: summaryRows.filter((row) => row.planning_local_repair_applied === true).length,
@@ -4696,6 +7014,12 @@ const report = {
     estimated_planning_cost_saving_ratio: round(fullPlanningCostUnits > 0 ? savedPlanningCostUnits / fullPlanningCostUnits : 0),
     mean_planning_cost_saving_ratio: round(mean(summaryRows.map((row) => numberValue(row.planning_cost_saving_ratio)))),
     mean_topology_similarity_score: round(mean(summaryRows.map((row) => numberValue(row.topology_similarity_score)))),
+    mean_topology_legacy_composite_similarity_score: round(mean(
+      summaryRows.map((row) => numberValue(row.topology_legacy_composite_similarity_score)),
+    )),
+    mean_topology_dynamic_similarity_score: round(mean(
+      summaryRows.map((row) => numberValue(row.topology_dynamic_similarity_score)),
+    )),
     mean_route_path_jaccard: round(mean(summaryRows.map((row) => numberValue(row.route_path_jaccard)))),
     mean_link_state_similarity: round(mean(summaryRows.map((row) => numberValue(row.link_state_similarity)))),
     mean_topology_forecast_stable_window_slices: round(mean(summaryRows.map((row) => numberValue(row.topology_forecast_stable_window_slices, NaN)).filter(Number.isFinite))),
@@ -4760,7 +7084,9 @@ const report = {
     mean_effective_hop_metadata_bytes: round(mean(summaryRows.map((row) => numberValue(row.mean_effective_hop_metadata_bytes, NaN)).filter(Number.isFinite))),
     mean_metadata_compression_ratio: round(mean(summaryRows.map((row) => numberValue(row.mean_metadata_compression_ratio, NaN)).filter(Number.isFinite))),
     estimated_metadata_bytes_saved_by_profile: round(summaryRows.reduce((total, row) => total + numberValue(row.estimated_metadata_bytes_saved_by_profile), 0)),
-    score_formula: "Score(P)=marginal_information_gain(P|S)/telemetry_cost_kb(P)",
+    score_formula: topologyVersionedRiskPlannerEnabled
+      ? "Score(a|S)=(information+risk_weight*risk-redundancy_weight*redundancy)/telemetry_bytes"
+      : "Score(P)=marginal_information_gain(P|S)/telemetry_cost_kb(P)",
     mean_marginal_information_gain: round(mean(summaryRows.map((row) => numberValue(row.mean_marginal_information_gain, NaN)).filter(Number.isFinite))),
     mean_base_information_gain: round(mean(summaryRows.map((row) => numberValue(row.mean_base_information_gain, NaN)).filter(Number.isFinite))),
     mean_marginal_redundancy_penalty: round(mean(summaryRows.map((row) => numberValue(row.mean_marginal_redundancy_penalty, NaN)).filter(Number.isFinite))),
@@ -4768,6 +7094,25 @@ const report = {
     mean_score_information_per_kb: round(mean(summaryRows.map((row) => numberValue(row.mean_score_information_per_kb, NaN)).filter(Number.isFinite))),
     mean_node_state_sampling_scale: round(mean(summaryRows.map((row) => numberValue(row.node_state_sampling_scale, NaN)).filter(Number.isFinite))),
     mean_node_state_information_gain: round(mean(summaryRows.map((row) => numberValue(row.mean_node_state_information_gain, NaN)).filter(Number.isFinite))),
+    topology_versioned_objective_enabled: topologyVersionedObjectiveEnabled,
+    mean_topology_versioned_objective: round(mean(summaryRows.map((row) => numberValue(row.mean_topology_versioned_objective, NaN)).filter(Number.isFinite))),
+    mean_topology_versioned_objective_advantage: round(mean(summaryRows.map((row) => numberValue(row.mean_topology_versioned_objective_advantage, NaN)).filter(Number.isFinite))),
+    mean_topology_versioned_node_information_gain: round(mean(summaryRows.map((row) => numberValue(row.mean_topology_versioned_node_information_gain, NaN)).filter(Number.isFinite))),
+    mean_topology_versioned_node_redundancy_penalty: round(mean(summaryRows.map((row) => numberValue(row.mean_topology_versioned_node_redundancy_penalty, NaN)).filter(Number.isFinite))),
+    mean_topology_versioned_expected_error_reduction: round(mean(summaryRows.map((row) => numberValue(row.mean_topology_versioned_expected_error_reduction, NaN)).filter(Number.isFinite))),
+    mean_topology_versioned_expected_aoi_reduction: round(mean(summaryRows.map((row) => numberValue(row.mean_topology_versioned_expected_aoi_reduction, NaN)).filter(Number.isFinite))),
+    mean_topology_versioned_evidence_confidence: round(mean(summaryRows.map((row) => numberValue(row.mean_topology_versioned_evidence_confidence, NaN)).filter(Number.isFinite))),
+    mean_topology_versioned_path_topology_share: round(mean(summaryRows.map((row) => numberValue(row.mean_topology_versioned_path_topology_share, NaN)).filter(Number.isFinite))),
+    mean_topology_versioned_structural_granularity_scale: round(mean(summaryRows.map((row) => numberValue(row.mean_topology_versioned_structural_granularity_scale, NaN)).filter(Number.isFinite))),
+    mean_topology_versioned_score_adjustment: round(mean(summaryRows.map((row) => numberValue(row.mean_topology_versioned_score_adjustment, NaN)).filter(Number.isFinite))),
+    topology_versioned_promoted_paths: summaryRows.reduce((total, row) => total + numberValue(row.topology_versioned_promoted_paths), 0),
+    topology_versioned_demoted_paths: summaryRows.reduce((total, row) => total + numberValue(row.topology_versioned_demoted_paths), 0),
+    topology_versioned_legacy_fallback_paths: summaryRows.reduce((total, row) => total + numberValue(row.topology_versioned_legacy_fallback_paths), 0),
+    topology_versioned_shadow_guard_agree_paths: summaryRows.reduce((total, row) => total + numberValue(row.topology_versioned_shadow_guard_agree_paths), 0),
+    topology_versioned_shadow_guard_admitted_paths: summaryRows.reduce((total, row) => total + numberValue(row.topology_versioned_shadow_guard_admitted_paths), 0),
+    topology_versioned_shadow_guard_node_fallbacks: summaryRows.reduce((total, row) => total + numberValue(row.topology_versioned_shadow_guard_node_fallbacks), 0),
+    topology_versioned_shadow_guard_byte_fallbacks: summaryRows.reduce((total, row) => total + numberValue(row.topology_versioned_shadow_guard_byte_fallbacks), 0),
+    topology_versioned_shadow_guard_information_fallbacks: summaryRows.reduce((total, row) => total + numberValue(row.topology_versioned_shadow_guard_information_fallbacks), 0),
     mean_cost_aware_score: round(mean(summaryRows.map((row) => numberValue(row.mean_cost_aware_score)))),
     mean_cost_aware_value_per_kb: round(mean(summaryRows.map((row) => numberValue(row.mean_cost_aware_value_per_kb)))),
     mean_estimated_total_telemetry_bytes_per_path: round(mean(summaryRows.map((row) => numberValue(row.mean_estimated_total_telemetry_bytes_per_path)))),
@@ -4864,6 +7209,15 @@ await Promise.all([
   writeFile(join(outputDir, `probe-sampling-mask-${algorithm}.csv`), rowsToCsv(samplingMaskRows), "utf8"),
   writeFile(join(outputDir, `probe-coverage-${algorithm}.json`), JSON.stringify(report, null, 2), "utf8"),
   writeFile(join(outputDir, `int-mc-contact-plan-${algorithm}.json`), JSON.stringify(contactPlan, null, 2), "utf8"),
+  writeFile(join(outputDir, `importance-target-plan-${algorithm}.csv`), rowsToCsv(importanceTargetPlan.rows), "utf8"),
+  writeFile(join(outputDir, `importance-target-plan-${algorithm}.json`), JSON.stringify({
+    schema_version: "stage2-importance-target-plan-v1",
+    generated_at: new Date().toISOString(),
+    enabled: importanceAwareTargetsEnabled,
+    summary: importanceTargetPlan.summary,
+    per_slice_metadata: importanceMetadataSummaryRows,
+    targets: importanceTargetPlan.rows,
+  }, null, 2), "utf8"),
 ]);
 
 console.log(JSON.stringify({
@@ -4875,6 +7229,9 @@ console.log(JSON.stringify({
   topologyClasses: contactPlan.classes.length,
   candidatePaths: candidatePaths.length,
   selectedPaths: selectedRows.length,
+  importanceAwareTargetsEnabled,
+  importanceTargets: importanceTargetPlan.rows.length,
+  importanceSavedPayloadBytes: report.coverage.importance_saved_payload_bytes,
   samplingMaskRows: samplingMaskRows.length,
   samplingMaskDensity: report.coverage.sampling_mask_density,
   duplicateSamplingObservations: report.coverage.duplicate_sampling_observations,

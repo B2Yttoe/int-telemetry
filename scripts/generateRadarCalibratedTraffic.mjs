@@ -484,7 +484,7 @@ const trafficMbpsByClass = rows.reduce((counts, row) => {
   return counts;
 }, {});
 const metadata = {
-  schema: "int-temerity-radar-calibrated-traffic-metadata/v1",
+  schema: "int-telemetry-radar-calibrated-traffic-metadata/v1",
   generated_at: new Date().toISOString(),
   generator: "scripts/generateRadarCalibratedTraffic.mjs",
   snapshot: {

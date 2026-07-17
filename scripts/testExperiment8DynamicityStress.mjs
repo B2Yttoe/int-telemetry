@@ -65,6 +65,31 @@ const second = transformDynamicityTrace({
 });
 
 assert.deepEqual(first, second, "same seed must produce byte-equivalent output");
+
+const seededA = transformDynamicityTrace({
+  links,
+  targetStressRate: 0.25,
+  seed: "transition-a",
+  initialMaskSeed: "shared-initial-mask",
+  tolerance: 0.05,
+});
+const seededB = transformDynamicityTrace({
+  links,
+  targetStressRate: 0.25,
+  seed: "transition-b",
+  initialMaskSeed: "shared-initial-mask",
+  tolerance: 0.05,
+});
+const activeSignature = (rows, slice) => rows
+  .filter((row) => Number(row.slice_index) === slice && row.is_active === "true")
+  .map((row) => row.link_id)
+  .sort();
+assert.deepEqual(activeSignature(seededA.links, 0), activeSignature(seededB.links, 0));
+assert.notDeepEqual(
+  [1, 2, 3, 4, 5].map((slice) => activeSignature(seededA.links, slice)),
+  [1, 2, 3, 4, 5].map((slice) => activeSignature(seededB.links, slice)),
+  "different transition seeds should be able to produce distinct post-T00 churn schedules",
+);
 assert.ok(
   Math.abs(first.summary.achieved_stress_rate - 0.25) <= 0.05,
   `stress ${first.summary.achieved_stress_rate} must approach requested 0.25`,
@@ -88,6 +113,12 @@ const lowStructuredStress = transformDynamicityTrace({
   seed: "structured-stress",
   tolerance: 0.06,
 });
+const staticStructuredStress = transformDynamicityTrace({
+  links,
+  targetStressRate: 0,
+  seed: "structured-stress",
+  tolerance: 0.001,
+});
 const highStructuredStress = transformDynamicityTrace({
   links,
   targetStressRate: 0.25,
@@ -97,6 +128,12 @@ const highStructuredStress = transformDynamicityTrace({
 assert.ok(
   highStructuredStress.summary.achieved_controlled_churn_rate > lowStructuredStress.summary.achieved_controlled_churn_rate,
   "higher stress must produce more controlled inter-plane churn",
+);
+assert.equal(staticStructuredStress.summary.achieved_controlled_churn_rate, 0);
+assert.ok(staticStructuredStress.summary.mean_forced_down_fraction > 0, "0% churn control retains the fixed outage density");
+assert.ok(
+  Math.abs(staticStructuredStress.summary.mean_forced_down_fraction - highStructuredStress.summary.mean_forced_down_fraction) < 1e-12,
+  "0% churn and dynamic groups must use the same forced-down density",
 );
 assert.ok(
   Math.abs(lowStructuredStress.summary.mean_forced_down_fraction - highStructuredStress.summary.mean_forced_down_fraction) < 1e-12,

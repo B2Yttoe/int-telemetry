@@ -118,8 +118,8 @@ export function compareOrbitEpochs({ modelSnapshot, validationSnapshot, comparis
       const radialError = dot(delta, radialUnit);
       const alongTrackError = dot(delta, alongTrackUnit);
       const crossTrackError = dot(delta, crossTrackUnit);
-      const modelEpoch = utcDate(model.epoch ?? model.raw_omm?.EPOCH);
-      const validationEpoch = utcDate(validation.epoch ?? validation.raw_omm?.EPOCH);
+      const modelEpoch = utcDate(model.epoch ?? model.EPOCH ?? model.raw_omm?.EPOCH);
+      const validationEpoch = utcDate(validation.epoch ?? validation.EPOCH ?? validation.raw_omm?.EPOCH);
       rows.push({
         norad_id: id,
         satellite_name: validation.satellite_name ?? validation.OBJECT_NAME ?? validation.raw_omm?.OBJECT_NAME ?? "",
@@ -155,6 +155,7 @@ export function compareOrbitEpochs({ modelSnapshot, validationSnapshot, comparis
   const successful = rows.filter((row) => Number.isFinite(row.eci_position_error_km));
   const absolute = (field) => successful.map((row) => Math.abs(numberValue(row[field])));
   const positionErrors = absolute("eci_position_error_km");
+  const epochSeparations = successful.map((row) => numberValue(row.epoch_separation_hours)).filter(Number.isFinite);
   return {
     rows,
     summary: {
@@ -164,6 +165,10 @@ export function compareOrbitEpochs({ modelSnapshot, validationSnapshot, comparis
       successful_propagations: successful.length,
       propagation_failures: propagationFailures,
       comparison_time: time.toISOString(),
+      epoch_separation_mean_hours: round(mean(epochSeparations)),
+      epoch_separation_p50_hours: round(quantile(epochSeparations, 0.5)),
+      epoch_separation_p95_hours: round(quantile(epochSeparations, 0.95)),
+      positive_epoch_separation_ratio: round(epochSeparations.filter((value) => value > 0).length / Math.max(epochSeparations.length, 1)),
       eci_position_mae_km: round(mean(positionErrors)),
       eci_position_p50_km: round(quantile(positionErrors, 0.5)),
       eci_position_p95_km: round(quantile(positionErrors, 0.95)),

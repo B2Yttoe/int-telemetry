@@ -25,9 +25,21 @@ function epochOf(record) {
 
 function epochRange(records) {
   const epochs = records.map(epochOf).filter(Boolean).sort();
+  let epochMedian = "";
+  if (epochs.length > 0) {
+    const middle = Math.floor(epochs.length / 2);
+    if (epochs.length % 2 === 1) {
+      epochMedian = epochs[middle];
+    } else {
+      const left = new Date(epochs[middle - 1]).getTime();
+      const right = new Date(epochs[middle]).getTime();
+      epochMedian = new Date((left + right) / 2).toISOString();
+    }
+  }
   return {
     epoch_start: epochs[0] ?? "",
     epoch_end: epochs.at(-1) ?? "",
+    epoch_median: epochMedian,
   };
 }
 
@@ -62,23 +74,34 @@ export async function buildEpochRecord({
     retrieved_at: retrieval,
     epoch_start: range.epoch_start,
     epoch_end: range.epoch_end,
+    epoch_median: range.epoch_median,
     record_count: records.length,
     parser_version: parserVersion,
   };
 }
 
-export function auditEpochIndependence(records = []) {
+export function auditEpochIndependence(records = [], { minimumValidationEpochs = 1 } = {}) {
   const inputs = records.filter((record) => record.role === "model-input");
   const validations = records.filter((record) => record.role === "external-validation");
   const violations = [];
   const comparisons = [];
   if (inputs.length === 0) violations.push("No model-input epoch is registered.");
   if (validations.length === 0) violations.push("No external-validation epoch is registered.");
+  if (validations.length < minimumValidationEpochs) {
+    violations.push(`External validation requires at least ${minimumValidationEpochs} independent validation epochs.`);
+  }
+  for (let left = 0; left < validations.length; left += 1) {
+    for (let right = left + 1; right < validations.length; right += 1) {
+      if (validations[left].sha256 && validations[left].sha256 === validations[right].sha256) {
+        violations.push(`${validations[left].name} and ${validations[right].name} validation epochs use the same SHA-256.`);
+      }
+    }
+  }
   inputs.forEach((input) => {
     validations.forEach((validation) => {
       const sameHash = Boolean(input.sha256) && input.sha256 === validation.sha256;
-      const inputEpoch = new Date(input.epoch_end || input.epoch_start).getTime();
-      const validationEpoch = new Date(validation.epoch_start || validation.epoch_end).getTime();
+      const inputEpoch = new Date(input.epoch_median || input.epoch_end || input.epoch_start).getTime();
+      const validationEpoch = new Date(validation.epoch_median || validation.epoch_start || validation.epoch_end).getTime();
       const elapsedHours = Number.isFinite(inputEpoch) && Number.isFinite(validationEpoch)
         ? (validationEpoch - inputEpoch) / 3_600_000
         : null;
@@ -95,6 +118,9 @@ export function auditEpochIndependence(records = []) {
       }
       if (!input.epoch_start || !validation.epoch_start) {
         violations.push(`${input.name} or ${validation.name} has no parseable orbital epoch.`);
+      }
+      if (elapsedHours !== null && elapsedHours <= 0) {
+        violations.push(`${validation.name} is not later than model input ${input.name}.`);
       }
     });
   });

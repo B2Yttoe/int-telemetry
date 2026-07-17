@@ -2,6 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
+import { inspectProcessVisualizationJson } from "./process-visualization-inspector.mjs";
 
 function argValue(args, name, fallback = "") {
   const index = args.indexOf(name);
@@ -238,7 +239,7 @@ const csvExpectations = [
   ["probe link overhead rows", requiredFiles.probeLinkOverhead, manifest.int_pipeline?.probe_int?.linkOverheadRows],
   ["probe node overhead rows", requiredFiles.probeNodeOverhead, manifest.stage1?.counts?.nodes],
   ["probe path rows", requiredFiles.probePaths, manifest.int_pipeline?.probe_int?.probePaths],
-  ["reporting path rows", requiredFiles.reportingPaths, manifest.int_pipeline?.reporting?.plannedReportingPaths],
+  ["reporting path rows", requiredFiles.reportingPaths, manifest.int_pipeline?.reporting?.probes],
   ["probe reconstructed node rows", requiredFiles.reconstructedNodes, manifest.stage1?.counts?.nodes],
   ["probe reconstructed link rows", requiredFiles.reconstructedLinks, manifest.stage1?.counts?.links],
   ["traffic OAM control action rows", requiredFiles.trafficControlActions, manifest.stage1?.counts?.metrics],
@@ -505,7 +506,9 @@ const probeEstimateGraph = existsSync(requiredFiles.probeEstimateGraph) ? await 
 const coverageAudit = existsSync(requiredFiles.coverageAudit) ? await readJson(requiredFiles.coverageAudit) : {};
 const inputValidation = existsSync(requiredFiles.inputValidationJson) ? await readJson(requiredFiles.inputValidationJson) : {};
 const deliverables = existsSync(requiredFiles.deliverablesJson) ? await readJson(requiredFiles.deliverablesJson) : {};
-const processVisualization = existsSync(requiredFiles.processVisualizationJson) ? await readJson(requiredFiles.processVisualizationJson) : {};
+const processVisualization = existsSync(requiredFiles.processVisualizationJson)
+  ? await inspectProcessVisualizationJson(requiredFiles.processVisualizationJson)
+  : {};
 const accuracyReport = existsSync(requiredFiles.accuracyReportJson) ? await readJson(requiredFiles.accuracyReportJson) : {};
 const intMcEvaluation = isIntMcRun && existsSync(requiredFiles.intMcEvaluation) ? await readJson(requiredFiles.intMcEvaluation) : {};
 const intMcSelectionReport = isIntMcRun && existsSync(requiredFiles.intMcSelectionReport) ? await readJson(requiredFiles.intMcSelectionReport) : {};
@@ -577,7 +580,11 @@ if (isIntMcRun) {
   check("int-mc topology forecast drift summary", typeof intMcSelectionReport.coverage?.mean_topology_forecast_drift_pressure === "number", formatValue(intMcSelectionReport.coverage?.mean_topology_forecast_drift_pressure));
   check("int-mc forecast priority summary", typeof intMcSelectionReport.coverage?.mean_forecast_priority_score === "number", formatValue(intMcSelectionReport.coverage?.mean_forecast_priority_score));
   check("int-mc cost-aware sampling parameter", typeof intMcSelectionReport.parameters?.cost_awareness_weight === "number", formatValue(intMcSelectionReport.parameters?.cost_awareness_weight));
-  check("int-mc cost-aware selection policy", Array.isArray(intMcSelectionReport.method?.satellite_adaptations) && intMcSelectionReport.method.satellite_adaptations.some((item) => String(item).includes("cost-aware marginal sampling")), formatValue(intMcSelectionReport.method?.satellite_adaptations));
+  check(
+    "int-mc cost-aware selection policy",
+    intMcSelectionReport.parameters?.cost_aware_sampling_enabled === true,
+    formatValue(intMcSelectionReport.parameters?.cost_aware_sampling_enabled),
+  );
   check("int-mc estimated telemetry byte summary", typeof intMcSelectionReport.coverage?.estimated_total_telemetry_bytes === "number", formatValue(intMcSelectionReport.coverage?.estimated_total_telemetry_bytes));
   check("int-mc cost-aware value summary", typeof intMcSelectionReport.coverage?.mean_cost_aware_value_per_kb === "number", formatValue(intMcSelectionReport.coverage?.mean_cost_aware_value_per_kb));
   check("int-mc telemetry byte budget parameter", typeof intMcSelectionReport.parameters?.telemetry_byte_budget_per_slice === "number", formatValue(intMcSelectionReport.parameters?.telemetry_byte_budget_per_slice));
@@ -591,11 +598,11 @@ check("deliverables probe link coverage", deliverables.primary_int_state_dataset
 check("deliverables validation truth boundary", deliverables.validation?.truth_boundary?.truth_used_only_for_validation === true, formatValue(deliverables.validation?.truth_boundary?.truth_used_only_for_validation));
 check("deliverables unknown boundary", deliverables.validation?.truth_boundary?.unknown_not_filled_from_truth === true, formatValue(deliverables.validation?.truth_boundary?.unknown_not_filled_from_truth));
 check("process visualization schema", processVisualization.schema_version === "stage2-int-process-visualization-v1", formatValue(processVisualization.schema_version));
-check("process visualization slice count", Array.isArray(processVisualization.slices) && processVisualization.slices.length === manifest.stage1?.counts?.metrics, `actual=${processVisualization.slices?.length ?? 0}, expected=${formatValue(manifest.stage1?.counts?.metrics)}`);
+check("process visualization slice count", processVisualization.slice_count === manifest.stage1?.counts?.metrics, `actual=${processVisualization.slice_count ?? 0}, expected=${formatValue(manifest.stage1?.counts?.metrics)}`);
 check("process visualization has probes", (processVisualization.summary?.probes ?? 0) === manifest.int_pipeline?.probe_int?.probePaths, `actual=${formatValue(processVisualization.summary?.probes)}, expected=${formatValue(manifest.int_pipeline?.probe_int?.probePaths)}`);
 check("process visualization has hop events", (processVisualization.summary?.hop_events ?? 0) === manifest.int_pipeline?.probe_int?.hopRecords, `actual=${formatValue(processVisualization.summary?.hop_events)}, expected=${formatValue(manifest.int_pipeline?.probe_int?.hopRecords)}`);
 check("process visualization has report events", (processVisualization.summary?.report_events ?? 0) === manifest.int_pipeline?.probe_int?.reports, `actual=${formatValue(processVisualization.summary?.report_events)}, expected=${formatValue(manifest.int_pipeline?.probe_int?.reports)}`);
-check("process visualization OAM snapshots", Array.isArray(processVisualization.slices) && processVisualization.slices.every((slice) => slice.oam_reconstruction?.nodes?.length > 0 && slice.oam_reconstruction?.links?.length > 0), "every slice has reconstructed nodes and links");
+check("process visualization OAM snapshots", processVisualization.all_slices_have_oam_snapshots === true, "every slice has reconstructed nodes and links");
 check("process visualization non-truth state boundary", processVisualization.boundary?.process_view_uses_truth_for_state === false, formatValue(processVisualization.boundary?.process_view_uses_truth_for_state));
 check("accuracy report schema", accuracyReport.schema_version === "stage2-int-telemetry-accuracy-report-v1", formatValue(accuracyReport.schema_version));
 check("accuracy report conclusion", accuracyReport.conclusion?.pass === true, formatValue(accuracyReport.conclusion?.pass));

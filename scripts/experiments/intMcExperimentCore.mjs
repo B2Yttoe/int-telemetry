@@ -6,6 +6,8 @@ import { performance } from "node:perf_hooks";
 import { join } from "node:path";
 import { parseCsv, rowsToCsv } from "./reportUtils.mjs";
 
+export const INT_MC_CORE_IMPLEMENTATION_VERSION = "topology-versioned-risk-hard-budget-v4";
+
 export const PROFILE_CATALOG = Object.freeze([
   Object.freeze({
     id: "iridium-next-small",
@@ -153,18 +155,19 @@ function metricFields(prefix, metrics = {}) {
   };
 }
 
-export async function collectIntMcMetrics({ truthDir, stage2Dir, groundDir }) {
+export async function collectIntMcMetrics({ truthDir, stage2Dir, groundDir, telemetryStage2Dir = stage2Dir }) {
   const [metadata, coverageReport, runReport, evaluation, summaryRows, linkOverheadRows] = await Promise.all([
     readJson(join(truthDir, "metadata.json")),
     readJson(join(stage2Dir, "probe-coverage-int-mc.json")),
-    readJson(join(stage2Dir, "probe-int-run-report-int-mc.json")),
+    readJson(join(telemetryStage2Dir, "probe-int-run-report-int-mc.json")),
     readJson(join(groundDir, "int-mc-evaluation.json")),
     readCsv(join(stage2Dir, "probe-summary-int-mc.csv")),
-    readCsv(join(stage2Dir, "probe-int-link-overhead-int-mc.csv")),
+    readCsv(join(telemetryStage2Dir, "probe-int-link-overhead-int-mc.csv")),
   ]);
   const coverage = coverageReport.coverage ?? {};
   const method = coverageReport.method ?? {};
   const overhead = runReport.overhead ?? {};
+  const runtimePlanning = runReport.planning ?? {};
   const reconstruction = evaluation.reconstruction ?? {};
   const linkMetrics = evaluation.metrics ?? {};
   const nodeReconstruction = evaluation.node_reconstruction ?? {};
@@ -193,6 +196,21 @@ export async function collectIntMcMetrics({ truthDir, stage2Dir, groundDir }) {
     node_completion_coverage: numberValue(nodeReconstruction.node_completion_coverage),
     total_telemetry_generated_bytes: generatedBytes,
     telemetry_bytes_per_node_slice: round(generatedBytes / Math.max(nodeCount * sliceCount, 1), 4),
+    telemetry_byte_budget_enabled: Boolean(runtimePlanning.telemetry_byte_budget_enabled),
+    telemetry_byte_budget_per_slice: numberValue(runtimePlanning.telemetry_byte_budget_per_slice),
+    telemetry_byte_budget_per_node_slice: numberValue(runtimePlanning.telemetry_byte_budget_per_node_slice),
+    telemetry_byte_budget_pad_to_cap: Boolean(runtimePlanning.telemetry_byte_budget_pad_to_cap),
+    telemetry_byte_budget_padding_bytes: numberValue(runtimePlanning.telemetry_byte_budget_padding_bytes),
+    telemetry_padding_bytes_per_node_slice: round(
+      numberValue(runtimePlanning.telemetry_byte_budget_padding_bytes) / Math.max(nodeCount * sliceCount, 1),
+      4,
+    ),
+    telemetry_byte_budget_total_cap_bytes: numberValue(runtimePlanning.telemetry_byte_budget_total_cap_bytes),
+    telemetry_byte_budget_actual_total_bytes: numberValue(runtimePlanning.telemetry_byte_budget_actual_total_bytes),
+    telemetry_byte_budget_utilization: numberValue(runtimePlanning.telemetry_byte_budget_actual_total_bytes)
+      / Math.max(numberValue(runtimePlanning.telemetry_byte_budget_total_cap_bytes), 1),
+    telemetry_byte_budget_rejected_probe_paths: numberValue(runtimePlanning.telemetry_byte_budget_rejected_probe_paths),
+    telemetry_byte_budget_cap_violations: numberValue(runtimePlanning.telemetry_byte_budget_cap_violations),
     total_telemetry_energy_j: numberValue(overhead.total_telemetry_energy_j),
     hop_records: numberValue(overhead.hop_records),
     report_count: numberValue(overhead.reports),
@@ -201,7 +219,8 @@ export async function collectIntMcMetrics({ truthDir, stage2Dir, groundDir }) {
     total_probe_packet_base_bytes: numberValue(overhead.total_probe_packet_base_bytes),
     total_int_bytes: numberValue(overhead.total_int_bytes),
     total_isl_telemetry_link_bytes: round(islLinkBytes),
-    selected_paths: numberValue(coverage.selected_paths),
+    planned_selected_paths: numberValue(coverage.selected_paths),
+    selected_paths: numberValue(runtimePlanning.probe_paths, numberValue(coverage.selected_paths)),
     active_link_sampling_coverage: numberValue(coverage.active_link_sampling_coverage),
     reused_slice_plans: numberValue(coverage.reused_slice_plans),
     fresh_slice_plans: numberValue(coverage.fresh_slice_plans),
@@ -296,9 +315,20 @@ export async function collectIntMcMetricsBySlice({ stage2Dir, groundDir }) {
 }
 
 const DEFAULT_MECHANISMS = Object.freeze({
+  planner: "legacy-int-mc",
+  plannerModes: "reuse,repair,fresh",
+  riskWeight: 0.35,
+  redundancyWeight: 0.3,
+  planningCostWeight: 0.05,
+  predictionHorizon: 4,
+  informationGainMode: "marginal",
+  metadataActions: "full,compact,selective",
   adaptiveReuse: true,
+  adaptiveStructuralReuse: false,
+  structuralReuseErrorTolerance: 0.02,
   incrementalTopologyRepair: true,
   forecastRiskScoring: true,
+  topologyVersionedObjective: false,
   adaptiveProbeBudget: false,
   metricTensorCoupling: false,
   nodeStateCoupling: false,
@@ -311,11 +341,181 @@ const DEFAULT_MECHANISMS = Object.freeze({
   businessHotspotMigrationPrior: false,
   stateTensorJointCompletion: false,
   multiObjectiveBudget: false,
+  scaleAdaptiveTotalBudget: true,
+  scaleBudgetHeadroomRatio: 0.1,
+  scaleBudgetPathHeadroomRatio: 0.25,
   oamTargetAwareMetadata: false,
+  importanceAwareTargets: false,
+  importanceMetadataOnly: true,
+  importanceSelectiveMetadata: true,
+  importancePathScoring: false,
+  importanceScoreWeight: 0.12,
+  importanceShadowInformationFloor: 1,
+  importanceAoIShadowInformationFloor: 1,
+  importanceAoIDebtPathRatio: 0.1,
+  importanceRepairByteBudgetRatio: 0.15,
+  importanceBudgetNeutralReplacement: true,
+  importanceReplacementRatio: 0.25,
+  importanceReplacementMaxBaseLossRatio: 0.02,
+  importanceStrictForwardOnly: true,
+  importancePlaneRepresentativeRatio: 0,
+  importanceTargetRatio: 0.25,
+  importanceMaxAoISlices: 6,
+  importanceExplorationRatio: 0.08,
 });
 
 function pushTrueFlag(args, enabled, flag) {
   if (enabled) args.push(flag, "true");
+}
+
+export async function runIntMcCompletion({
+  label,
+  truthDir,
+  stage2Dir,
+  groundDir,
+  rank = FORMAL_DEFAULTS.rank,
+  windowSize = FORMAL_DEFAULTS.window_size,
+  iterations = FORMAL_DEFAULTS.iterations,
+  predictedContactPlanPath = join(stage2Dir, "predicted-contact-plan.json"),
+  telemetryStage2Dir = stage2Dir,
+  mechanisms = {},
+} = {}) {
+  const flags = { ...DEFAULT_MECHANISMS, ...mechanisms };
+  const reconstructorArgs = [
+    "--input", truthDir,
+    "--stage2", stage2Dir,
+    "--ground", groundDir,
+    "--out", groundDir,
+    "--algorithm", "int-mc",
+    "--rank", String(rank),
+    "--window-size", String(windowSize),
+    "--iterations", String(iterations),
+    "--predicted-contact-plan", predictedContactPlanPath,
+  ];
+  pushTrueFlag(reconstructorArgs, flags.metricTensorCoupling, "--metric-tensor-coupling");
+  pushTrueFlag(reconstructorArgs, flags.nodeStateCoupling, "--node-state-coupling");
+  pushTrueFlag(reconstructorArgs, flags.nodeEnergyPhysicsPrior, "--node-energy-physics-prior");
+  pushTrueFlag(reconstructorArgs, flags.jointStateCoupling, "--joint-state-coupling");
+  pushTrueFlag(reconstructorArgs, flags.orbitGraphRegularization, "--orbit-graph-regularization");
+  if (flags.orbitPeriodicPrior) {
+    reconstructorArgs.push(
+      "--orbit-periodic-prior", "true",
+      "--orbit-periodic-prior-slices", String(flags.orbitPeriodicPriorSlices),
+    );
+  }
+  pushTrueFlag(reconstructorArgs, flags.oamQualityFeedback, "--oam-quality-feedback");
+  pushTrueFlag(reconstructorArgs, flags.businessHotspotMigrationPrior, "--business-hotspot-migration-prior");
+  pushTrueFlag(reconstructorArgs, flags.stateTensorJointCompletion, "--state-tensor-joint-completion");
+  const completion = await runCommandTimed({
+    label: `${label}: matrix completion`,
+    script: "stage2-int/tools/int-mc-reconstructor.mjs",
+    args: reconstructorArgs,
+  });
+  const metrics = await collectIntMcMetrics({ truthDir, stage2Dir, groundDir, telemetryStage2Dir });
+  return {
+    metrics,
+    timing: completion.timing,
+    mechanisms: flags,
+    artifacts: {
+      ground_links_csv: join(groundDir, "ground-mc-reconstructed-links.csv"),
+      ground_nodes_csv: join(groundDir, "ground-mc-reconstructed-nodes.csv"),
+      evaluation_json: join(groundDir, "int-mc-evaluation.json"),
+      deployable_feedback_csv: join(groundDir, "int-mc-deployable-priority-retest.csv"),
+    },
+  };
+}
+
+export async function runIntMcPostSelection({
+  label,
+  truthDir,
+  sourceStage2Dir,
+  telemetryStage2Dir,
+  groundDir,
+  rank = FORMAL_DEFAULTS.rank,
+  windowSize = FORMAL_DEFAULTS.window_size,
+  iterations = FORMAL_DEFAULTS.iterations,
+  downlinkBudgetBytes = 1_000_000_000,
+  reportingInterruptionRate = 0,
+  reportingInterruptionSeed = "reporting-interruption",
+  telemetryByteBudgetPerSlice = 0,
+  telemetryByteBudgetPerNodeSlice = 0,
+  telemetryByteBudgetPadToCap = false,
+  writeEstimateGraph = false,
+  mechanisms = {},
+} = {}) {
+  const timings = {};
+  const probe = await runCommandTimed({
+    label: `${label}: probe execution`,
+    script: "stage2-int/tools/probe-int-runner.mjs",
+    args: [
+      "--input", truthDir,
+      "--stage2", sourceStage2Dir,
+      "--out", telemetryStage2Dir,
+      "--algorithm", "int-mc",
+      "--probe-paths", join(sourceStage2Dir, "probe-paths-int-mc.csv"),
+      "--reporting-paths", join(sourceStage2Dir, "reporting-paths-int-mc.csv"),
+      "--reporting-interruption-rate", String(reportingInterruptionRate),
+      "--reporting-interruption-seed", String(reportingInterruptionSeed),
+      "--telemetry-byte-budget-per-slice", String(telemetryByteBudgetPerSlice),
+      "--telemetry-byte-budget-per-node-slice", String(telemetryByteBudgetPerNodeSlice),
+      "--telemetry-byte-budget-pad-to-cap", String(Boolean(telemetryByteBudgetPadToCap)),
+    ],
+  });
+  timings.probe_execution = probe.timing;
+
+  const ground = await runCommandTimed({
+    label: `${label}: Ground OAM`,
+    script: "stage2-int/tools/ground-oam-reconstructor.mjs",
+    args: [
+      "--input", truthDir,
+      "--stage2", sourceStage2Dir,
+      "--out", groundDir,
+      "--hops", join(telemetryStage2Dir, "probe-int-hop-records-int-mc.csv"),
+      "--reports", join(telemetryStage2Dir, "probe-int-reports-int-mc.csv"),
+      "--downlink-budget-bytes", String(downlinkBudgetBytes),
+      "--write-estimate-graph", String(Boolean(writeEstimateGraph)),
+    ],
+  });
+  timings.ground_oam = ground.timing;
+
+  const completion = await runIntMcCompletion({
+    label,
+    truthDir,
+    stage2Dir: sourceStage2Dir,
+    telemetryStage2Dir,
+    groundDir,
+    rank,
+    windowSize,
+    iterations,
+    predictedContactPlanPath: join(sourceStage2Dir, "predicted-contact-plan.json"),
+    mechanisms,
+  });
+  timings.matrix_completion = completion.timing;
+  const runReport = await readJson(join(telemetryStage2Dir, "probe-int-run-report-int-mc.json"));
+  return {
+    metrics: completion.metrics,
+    timings,
+    mechanisms: completion.mechanisms,
+    reporting_interruption: {
+      requested_rate: numberValue(runReport.planning?.controlled_reporting_interruption_rate),
+      achieved_rate: numberValue(runReport.planning?.controlled_reporting_interruption_achieved_rate),
+      eligible_reports: numberValue(runReport.planning?.controlled_reporting_interruption_eligible_reports),
+      interrupted_reports: numberValue(runReport.planning?.controlled_reporting_interruptions),
+      seed: runReport.planning?.controlled_reporting_interruption_seed ?? "",
+    },
+    artifacts: {
+      probe_paths_csv: join(sourceStage2Dir, "probe-paths-int-mc.csv"),
+      executed_probe_paths_csv: join(telemetryStage2Dir, "probe-int-admitted-paths-int-mc.csv"),
+      hop_records_csv: join(telemetryStage2Dir, "probe-int-hop-records-int-mc.csv"),
+      reports_csv: join(telemetryStage2Dir, "probe-int-reports-int-mc.csv"),
+      byte_budget_csv: join(telemetryStage2Dir, "probe-int-byte-budget-int-mc.csv"),
+      run_report_json: join(telemetryStage2Dir, "probe-int-run-report-int-mc.json"),
+      importance_target_plan_csv: join(sourceStage2Dir, "importance-target-plan-int-mc.csv"),
+      importance_target_plan_json: join(sourceStage2Dir, "importance-target-plan-int-mc.json"),
+      ground_evaluation_json: join(groundDir, "ground-oam-evaluation.json"),
+      ...completion.artifacts,
+    },
+  };
 }
 
 export async function runIntMcPass({
@@ -340,6 +540,13 @@ export async function runIntMcPass({
   plannerOamNodesPath = "",
   oamTargetHopBytes = 96,
   oamTransitHopBytes = 88,
+  reportingInterruptionRate = 0,
+  reportingInterruptionSeed = "reporting-interruption",
+  telemetryByteBudgetPerSlice = 0,
+  telemetryByteBudgetPerNodeSlice = 0,
+  telemetryByteBudgetPadToCap = false,
+  scaleBudgetReferencePath = "",
+  writeEstimateGraph = false,
   mechanisms = {},
 } = {}) {
   const flags = { ...DEFAULT_MECHANISMS, ...mechanisms };
@@ -379,15 +586,51 @@ export async function runIntMcPass({
     "--observability-mode", observabilityMode,
     "--feedback-lag-slices", String(feedbackLagSlices),
     "--adaptive-reuse", String(Boolean(flags.adaptiveReuse)),
+    "--adaptive-structural-reuse", String(Boolean(flags.adaptiveStructuralReuse)),
+    "--structural-reuse-error-tolerance", String(flags.structuralReuseErrorTolerance ?? 0.02),
     "--incremental-topology-repair", String(Boolean(flags.incrementalTopologyRepair)),
     "--forecast-risk-scoring", String(Boolean(flags.forecastRiskScoring)),
+    "--topology-versioned-objective", String(Boolean(flags.topologyVersionedObjective)),
+    "--planner", String(flags.planner ?? "legacy-int-mc"),
+    "--planner-modes", String(flags.plannerModes ?? "reuse,repair,fresh"),
+    "--risk-weight", String(flags.riskWeight ?? 0.35),
+    "--redundancy-weight", String(flags.redundancyWeight ?? 0.3),
+    "--planning-cost-weight", String(flags.planningCostWeight ?? 0.05),
+    "--prediction-horizon", String(flags.predictionHorizon ?? 4),
+    "--information-gain-mode", String(flags.informationGainMode ?? "marginal"),
+    "--metadata-actions", String(flags.metadataActions ?? "full,compact,selective"),
+    "--scale-adaptive-total-budget", String(Boolean(flags.scaleAdaptiveTotalBudget)),
+    "--scale-budget-headroom-ratio", String(flags.scaleBudgetHeadroomRatio ?? 0.1),
+    "--scale-budget-path-headroom-ratio", String(flags.scaleBudgetPathHeadroomRatio ?? 0.25),
   ];
   if (plannerOamLinksPath) selectorArgs.push("--planner-oam-links", plannerOamLinksPath);
   if (plannerOamNodesPath) selectorArgs.push("--planner-oam-nodes", plannerOamNodesPath);
   if (feedbackPath) selectorArgs.push("--oam-priority-retest", feedbackPath);
   if (controlActionsPath) selectorArgs.push("--oam-control-actions", controlActionsPath);
+  if (scaleBudgetReferencePath) selectorArgs.push("--scale-budget-reference-csv", scaleBudgetReferencePath);
   pushTrueFlag(selectorArgs, flags.adaptiveProbeBudget, "--adaptive-probe-budget");
   pushTrueFlag(selectorArgs, flags.multiObjectiveBudget, "--multi-objective-budget");
+  if (flags.importanceAwareTargets) {
+    selectorArgs.push(
+      "--importance-aware-targets", "true",
+      "--importance-metadata-only", String(flags.importanceMetadataOnly !== false),
+      "--importance-selective-metadata", String(flags.importanceSelectiveMetadata !== false),
+      "--importance-path-scoring", String(flags.importancePathScoring === true || flags.importanceMetadataOnly === false),
+      "--importance-score-weight", String(flags.importanceScoreWeight ?? 0.12),
+      "--importance-shadow-information-floor", String(flags.importanceShadowInformationFloor ?? 1),
+      "--importance-aoi-shadow-information-floor", String(flags.importanceAoIShadowInformationFloor ?? 1),
+      "--importance-aoi-debt-path-ratio", String(flags.importanceAoIDebtPathRatio ?? 0.1),
+      "--importance-repair-byte-budget-ratio", String(flags.importanceRepairByteBudgetRatio ?? 0.15),
+      "--importance-budget-neutral-replacement", String(flags.importanceBudgetNeutralReplacement !== false),
+      "--importance-replacement-ratio", String(flags.importanceReplacementRatio ?? 0.25),
+      "--importance-replacement-max-base-loss-ratio", String(flags.importanceReplacementMaxBaseLossRatio ?? 0.02),
+      "--importance-strict-forward-only", String(flags.importanceStrictForwardOnly !== false),
+      "--importance-plane-representative-ratio", String(flags.importancePlaneRepresentativeRatio ?? 0),
+      "--importance-target-ratio", String(flags.importanceTargetRatio ?? 0.25),
+      "--importance-max-aoi-slices", String(flags.importanceMaxAoISlices ?? 6),
+      "--importance-exploration-ratio", String(flags.importanceExplorationRatio ?? 0.08),
+    );
+  }
   if (flags.oamTargetAwareMetadata) {
     selectorArgs.push(
       "--oam-target-aware-metadata", "true",
@@ -423,6 +666,11 @@ export async function runIntMcPass({
       "--stage2", stage2Dir,
       "--out", stage2Dir,
       "--algorithm", "int-mc",
+      "--reporting-interruption-rate", String(reportingInterruptionRate),
+      "--reporting-interruption-seed", String(reportingInterruptionSeed),
+      "--telemetry-byte-budget-per-slice", String(telemetryByteBudgetPerSlice),
+      "--telemetry-byte-budget-per-node-slice", String(telemetryByteBudgetPerNodeSlice),
+      "--telemetry-byte-budget-pad-to-cap", String(Boolean(telemetryByteBudgetPadToCap)),
     ],
   });
   timings.probe_execution = probe.timing;
@@ -437,43 +685,24 @@ export async function runIntMcPass({
       "--hops", join(stage2Dir, "probe-int-hop-records-int-mc.csv"),
       "--reports", join(stage2Dir, "probe-int-reports-int-mc.csv"),
       "--downlink-budget-bytes", String(downlinkBudgetBytes),
+      "--write-estimate-graph", String(Boolean(writeEstimateGraph)),
     ],
   });
   timings.ground_oam = ground.timing;
 
-  const reconstructorArgs = [
-    "--input", truthDir,
-    "--stage2", stage2Dir,
-    "--ground", groundDir,
-    "--out", groundDir,
-    "--algorithm", "int-mc",
-    "--rank", String(rank),
-    "--window-size", String(windowSize),
-    "--iterations", String(iterations),
-    "--predicted-contact-plan", predictedContactPlanPath,
-  ];
-  pushTrueFlag(reconstructorArgs, flags.metricTensorCoupling, "--metric-tensor-coupling");
-  pushTrueFlag(reconstructorArgs, flags.nodeStateCoupling, "--node-state-coupling");
-  pushTrueFlag(reconstructorArgs, flags.nodeEnergyPhysicsPrior, "--node-energy-physics-prior");
-  pushTrueFlag(reconstructorArgs, flags.jointStateCoupling, "--joint-state-coupling");
-  pushTrueFlag(reconstructorArgs, flags.orbitGraphRegularization, "--orbit-graph-regularization");
-  if (flags.orbitPeriodicPrior) {
-    reconstructorArgs.push(
-      "--orbit-periodic-prior", "true",
-      "--orbit-periodic-prior-slices", String(flags.orbitPeriodicPriorSlices),
-    );
-  }
-  pushTrueFlag(reconstructorArgs, flags.oamQualityFeedback, "--oam-quality-feedback");
-  pushTrueFlag(reconstructorArgs, flags.businessHotspotMigrationPrior, "--business-hotspot-migration-prior");
-  pushTrueFlag(reconstructorArgs, flags.stateTensorJointCompletion, "--state-tensor-joint-completion");
-  const completion = await runCommandTimed({
-    label: `${label}: matrix completion`,
-    script: "stage2-int/tools/int-mc-reconstructor.mjs",
-    args: reconstructorArgs,
+  const completion = await runIntMcCompletion({
+    label,
+    truthDir,
+    stage2Dir,
+    groundDir,
+    rank,
+    windowSize,
+    iterations,
+    predictedContactPlanPath,
+    mechanisms: flags,
   });
   timings.matrix_completion = completion.timing;
-
-  const metrics = await collectIntMcMetrics({ truthDir, stage2Dir, groundDir });
+  const metrics = completion.metrics;
   return {
     metrics,
     timings,
@@ -482,8 +711,12 @@ export async function runIntMcPass({
       predicted_contact_plan_json: predictedContactPlanPath,
       selector_report_json: join(stage2Dir, "probe-coverage-int-mc.json"),
       probe_paths_csv: join(stage2Dir, "probe-paths-int-mc.csv"),
+      executed_probe_paths_csv: join(stage2Dir, "probe-int-admitted-paths-int-mc.csv"),
       probe_summary_csv: join(stage2Dir, "probe-summary-int-mc.csv"),
       run_report_json: join(stage2Dir, "probe-int-run-report-int-mc.json"),
+      importance_target_plan_csv: join(stage2Dir, "importance-target-plan-int-mc.csv"),
+      importance_target_plan_json: join(stage2Dir, "importance-target-plan-int-mc.json"),
+      byte_budget_csv: join(stage2Dir, "probe-int-byte-budget-int-mc.csv"),
       ground_links_csv: join(groundDir, "ground-mc-reconstructed-links.csv"),
       ground_nodes_csv: join(groundDir, "ground-mc-reconstructed-nodes.csv"),
       evaluation_json: join(groundDir, "int-mc-evaluation.json"),
@@ -539,6 +772,17 @@ async function combineDeployableFeedback({ groundDir, outputPath }) {
   return rows;
 }
 
+export function resolvePass1Mechanisms({
+  variant = {},
+  selfFeedbackPass1 = false,
+  neutralPass1Mechanisms = null,
+} = {}) {
+  if (!selfFeedbackPass1 && neutralPass1Mechanisms) return { ...neutralPass1Mechanisms };
+  return selfFeedbackPass1
+    ? { ...(variant.mechanisms ?? {}) }
+    : { adaptiveReuse: true };
+}
+
 export async function runTwoPassVariant({
   profile,
   variant,
@@ -548,6 +792,8 @@ export async function runTwoPassVariant({
   parameters = {},
   resume = true,
   sharedPass1 = null,
+  selfFeedbackPass1 = false,
+  neutralPass1Mechanisms = null,
 } = {}) {
   await mkdir(outputDir, { recursive: true });
   const manifestPath = join(outputDir, "run-manifest.json");
@@ -570,12 +816,15 @@ export async function runTwoPassVariant({
     ...parameters,
   };
   const inputFingerprint = stableHash({
+    implementation_version: INT_MC_CORE_IMPLEMENTATION_VERSION,
     profile,
     variant,
     parameters: normalizedParameters,
     truth_metadata_sha256: truthMetadataHash,
     candidate_paths_sha256: candidatePathsHash,
     shared_pass1_fingerprint: sharedPass1?.fingerprint ?? "",
+    self_feedback_pass1: selfFeedbackPass1,
+    neutral_pass1_mechanisms: neutralPass1Mechanisms,
   });
 
   if (resume && existsSync(manifestPath)) {
@@ -596,6 +845,7 @@ export async function runTwoPassVariant({
   const pass2GroundDir = join(outputDir, "ground-oam", variant.id);
   await writeJson(manifestPath, {
     schema_version: "int-mc-two-pass-run-v1",
+    implementation_version: INT_MC_CORE_IMPLEMENTATION_VERSION,
     status: "running",
     started_at: new Date().toISOString(),
     profile_id: profile.id,
@@ -603,6 +853,11 @@ export async function runTwoPassVariant({
     input_fingerprint: inputFingerprint,
   });
 
+  const pass1Mechanisms = resolvePass1Mechanisms({
+    variant,
+    selfFeedbackPass1,
+    neutralPass1Mechanisms,
+  });
   const before = sharedPass1?.run ?? await runIntMcPass({
       label: `${profile.short_label} pass1`,
       truthDir,
@@ -610,9 +865,7 @@ export async function runTwoPassVariant({
       stage2Dir: pass1Stage2Dir,
       groundDir: pass1GroundDir,
       ...normalizedParameters,
-      mechanisms: {
-        adaptiveReuse: true,
-      },
+      mechanisms: pass1Mechanisms,
     });
   const pass1Fingerprint = sharedPass1?.fingerprint ?? stableHash({
     truth_metadata_sha256: truthMetadataHash,
@@ -644,6 +897,7 @@ export async function runTwoPassVariant({
 
   const manifest = {
     schema_version: "int-mc-two-pass-run-v1",
+    implementation_version: INT_MC_CORE_IMPLEMENTATION_VERSION,
     status: "complete",
     started_at: new Date().toISOString(),
     completed_at: new Date().toISOString(),
@@ -664,6 +918,8 @@ export async function runTwoPassVariant({
     pass1_stage2_dir: pass1Stage2Dir,
     pass1_ground_dir: pass1GroundDir,
     pass1_fingerprint: pass1Fingerprint,
+    pass1_feedback_source: sharedPass1 ? "shared-pass1-oam" : selfFeedbackPass1 ? "variant-self-oam" : "neutral-pass1-oam",
+    pass1_mechanisms: sharedPass1 ? {} : pass1Mechanisms,
     before,
     after,
   };

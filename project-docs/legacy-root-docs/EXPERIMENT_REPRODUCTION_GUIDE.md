@@ -1,4 +1,4 @@
-# INT-Temerity 实验复现与收尾指南
+# INT-Telemetry 实验复现与收尾指南
 
 本文档用于项目收尾阶段，目标是让新的使用者能够从当前代码库出发，独立复现以下完整链路：
 
@@ -82,7 +82,7 @@ npm.cmd install
 所有命令都建议在项目根目录执行：
 
 ```text
-E:\INT-Temerity
+E:\INT-Telemetry
 ```
 
 可以用下面命令确认当前目录：
@@ -125,7 +125,7 @@ npm run verify:goal
 
 ```json
 {
-  "schema_version": "int-temerity-goal-e2e-verification-v1",
+  "schema_version": "int-telemetry-goal-e2e-verification-v1",
   "summary": {
     "pass": true,
     "checks": 19,

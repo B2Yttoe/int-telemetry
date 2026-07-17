@@ -1,0 +1,40 @@
+{
+  "schema_version": "experiment13-system-validation-fixture-manifest-v1",
+  "generated_at": "2026-07-14T12:07:38.587Z",
+  "evidence_boundary": "adapter-derived-from-frozen-stage1-and-stage2-artifacts-no-core-model-rerun",
+  "fixture": {
+    "node_count": 66,
+    "slice_count": 8,
+    "link_rows": 968,
+    "unique_links": 255,
+    "business_flows": 94,
+    "probe_flows": 154,
+    "rejected_records": 0
+  },
+  "inputs": {
+    "nodes": {
+      "path": "reports/experiment2-native-baseline-rerun-final/iridium-next-small/stage1-truth/nodes.csv",
+      "sha256": "2ca907ea694fcfd551c2f8dd0aa1ae9f5d2d0b98971c2cfe5bbfee6e36a4ae25"
+    },
+    "links": {
+      "path": "reports/experiment2-native-baseline-rerun-final/iridium-next-small/stage1-truth/links.csv",
+      "sha256": "3964dfd935990b670d47a1566a29268693bab899636ff45b52bdb4bf1ff60026"
+    },
+    "routes": {
+      "path": "reports/experiment2-native-baseline-rerun-final/iridium-next-small/stage1-truth/routes.csv",
+      "sha256": "23cbbf2c9f78b8895af943e1d5d0d2775ba081b1ec06a8f5c6441718781e499d"
+    },
+    "enhanced_probes": {
+      "path": "reports/experiment2-int-mc-enhanced-comparison/iridium-next-small/stage2/int-mc-enhanced/probe-paths-int-mc.csv",
+      "sha256": "dab2f65a9c03339223fcbf2cb6099096e1105ec3398c82d912d568aff8e11f2f"
+    }
+  },
+  "outputs": {
+    "config": "config.json",
+    "nodes": "nodes.csv",
+    "links": "links.csv",
+    "business_flows": "business-flows.csv",
+    "probe_flows": "probe-flows.csv",
+    "rejected_records": "rejected-records.csv"
+  }
+}

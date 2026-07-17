@@ -1,0 +1,61 @@
+name: Experiment 13 ns-3 microvalidation
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "stage3-system-validation/**"
+      - "scripts/experiments/systemPacketValidation.mjs"
+      - "scripts/experiments/systemValidationReport.mjs"
+      - "scripts/runExperiment13SystemValidation.mjs"
+      - "scripts/testExperiment13SystemValidation.mjs"
+      - ".github/workflows/experiment13-ns3-microvalidation.yml"
+
+jobs:
+  ns3-cross-validation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install project dependencies
+        run: npm ci
+
+      - name: Validate frozen adapter fixture
+        run: npm run test:experiment13
+
+      - name: Run independent reference replay
+        run: npm run experiment13:reference
+
+      - name: Download pinned ns-3.44 source
+        run: |
+          curl --fail --location --retry 3 \
+            https://www.nsnam.org/releases/ns-allinone-3.44.tar.bz2 \
+            --output "$RUNNER_TEMP/ns-allinone-3.44.tar.bz2"
+          tar -xjf "$RUNNER_TEMP/ns-allinone-3.44.tar.bz2" -C "$RUNNER_TEMP"
+
+      - name: Run nine packet-level combinations
+        env:
+          NS3_ROOT: ${{ runner.temp }}/ns-allinone-3.44/ns-3.44
+        run: |
+          bash stage3-system-validation/ns3/run-ns3.sh \
+            "$NS3_ROOT" \
+            "$GITHUB_WORKSPACE/stage3-system-validation/fixtures/iridium-66-20slice" \
+            "$GITHUB_WORKSPACE/reports/experiment13-system-validation/ns3"
+
+      - name: Generate Chinese report and enforce completion gate
+        run: |
+          npm run experiment13:report
+          node -e "const s=require('./reports/experiment13-system-validation/experiment13-system-validation-summary.json'); if(s.evidence_status!=='ns3-system-cross-validation-complete') process.exit(1)"
+
+      - name: Upload reproducible evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: experiment13-ns3-system-validation
+          path: reports/experiment13-system-validation
+          if-no-files-found: error

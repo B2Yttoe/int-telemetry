@@ -1,0 +1,50 @@
+{
+  "schema": "int-telemetry-experiment14b-mlab-metric-specific-amendment/v1",
+  "amendment_id": "experiment14b-mlab-metric-specific-validation",
+  "parent_experiment": "experiment14b-prospective-external-validation",
+  "protocol_status": "pre-registered-after-engineering-dry-run-before-latency-member-acquisition",
+  "rationale": "The engineering dry run showed that RTT was being read from a file filtered for throughput anomalies. This amendment changes only the external member used for RTT validation; it does not change the physical path model, fitted parameter definitions, parameter bounds, topology, or test-set isolation rules.",
+  "dataset": {
+    "doi": "https://doi.org/10.4121/0bf59468-e5cb-433f-aeb2-e04cf694b65c.v1",
+    "url": "https://data.4tu.nl/file/0bf59468-e5cb-433f-aeb2-e04cf694b65c/47d06d33-c98d-442b-ac77-a7b71455e136",
+    "license": "CC-BY-4.0",
+    "source_filter": "NDT7",
+    "maximum_training_samples": 6000,
+    "maximum_test_samples": 6000,
+    "training_seed": 1421,
+    "test_seed": 1422,
+    "excluded_test_dates_due_to_prior_repository_exposure": ["2025-11-24"],
+    "latency_training_member": {
+      "name": "Starlink-enriched-and-filtered-crowdsourced-data/filtered_percentile_0.75/filtered_download_latency_ms_download_10_2025_with_sat_density_enriched.csv",
+      "local_header_offset": 867520138,
+      "compressed_size": 50520434,
+      "uncompressed_size": 221533184,
+      "compression_method": 8
+    },
+    "latency_test_member": {
+      "name": "Starlink-enriched-and-filtered-crowdsourced-data/filtered_percentile_0.75/filtered_download_latency_ms_download_11_2025_with_sat_density_enriched.csv",
+      "local_header_offset": 1055034036,
+      "compressed_size": 45880874,
+      "uncompressed_size": 200264275,
+      "compression_method": 8
+    }
+  },
+  "metric_sources": {
+    "rtt": "latency-percentile-filtered monthly member",
+    "throughput": "isolation-forest-throughput-filtered monthly member from the frozen parent experiment"
+  },
+  "frozen_model": {
+    "implementation": "scripts/experiments/userPerformanceLayer.mjs",
+    "free_fitted_parameter_count": 2,
+    "rtt_parameter": "rtt_access_and_transport_offset_ms",
+    "throughput_parameter": "scheduler_and_transport_share",
+    "test_values_allowed_for_fit": false,
+    "post_test_parameter_updates_allowed": false
+  },
+  "primary_metrics": {
+    "rtt": ["MAE", "RMSE", "P50 ratio", "P95 ratio", "KS distance", "Wasserstein distance", "95% interval coverage"],
+    "throughput": ["MAE", "RMSE", "P50 ratio", "P95 ratio", "KS distance", "Wasserstein distance", "95% interval coverage"],
+    "pairing": ["exact topology-time ratio", "city-level server ratio", "country fallback ratio", "global fallback ratio"]
+  },
+  "claim_boundary": "M-Lab validates same-semantics user-side RTT and NDT7 throughput distributions. Without same-epoch historical GP and exact server coordinates, it does not validate each historical satellite path; exact timestamp and fixed-target path validation is assigned to the prospective RIPE Atlas component."
+}

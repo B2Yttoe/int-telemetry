@@ -34,6 +34,8 @@ npm run experiment:realism -- --reuse-truth --truth-dir reports/experiment1-sate
 npm run generate:radar-traffic -- --snapshot data\tle-snapshots\celestrak-starlink-real-walker-72x22.json --profile traffic-calibration\cloudflare-radar-profile.json --radar-json reports\_archive\experiment1-pre-final-20260703-211932\experiment1-external-realism-72x22\external\cloudflare-radar\radar-as14593-traffic.json --radar-window latest --out reports\experiment1-satellite-data-authenticity\input\radar-fitted-traffic.csv --metadata-out reports\experiment1-satellite-data-authenticity\input\radar-fitted-traffic.metadata.json --slices 48
 
 npm run experiment:realism -- --out reports\experiment1-satellite-data-authenticity --snapshot data\tle-snapshots\celestrak-starlink-real-walker-72x22.json --tasks reports\experiment1-satellite-data-authenticity\input\radar-fitted-traffic.csv --slices 48 --radar-json reports\_archive\experiment1-pre-final-20260703-211932\experiment1-external-realism-72x22\external\cloudflare-radar\radar-as14593-traffic.json --radar-window latest --ripe-max-probes 16 --ripe-hours 4
+
+npm run experiment1:internal-plausibility -- --out reports\experiment1-satellite-data-authenticity
 ```
 
 使用用户从 Cloudflare Radar 页面或 API 导出的 CSV：
@@ -62,6 +64,10 @@ npm run experiment:realism
 | `network-performance-external-comparison.csv` | 模型用户侧 RTT、内部任务路由时延与 RIPE Atlas Starlink ping RTT 的汇总对照。 |
 | `user-facing-rtt-comparison.csv` | 逐 RIPE 探针样本的用户侧 RTT 估计，包括时间片、探针位置、接入卫星、区域网关、星间回退路径和模型 RTT。 |
 | `external-source-status.csv` | 每个外部数据源是否成功获取、是否缺少 token、是否使用缓存。 |
+| `experiment1-internal-state-plausibility.html` | 内部状态可信性审计可视化报告，专门验证 CPU、电量、队列、缓存等公开数据无法直接观测的潜变量。 |
+| `experiment1-internal-state-plausibility.json` | 机器可读内部状态审计结果，包含每个检查项、违规样本、时间片响应序列和可信性分数。 |
+| `experiment1-internal-state-checks.csv` | 每个公式/边界/响应检查项的表格，可直接放入论文附录或答辩材料。 |
+| `experiment1-internal-state-timeseries.csv` | 按时间片汇总的业务、CPU、光照、净功率和链路活跃度序列。 |
 | `stage1-truth/` | 本次实验使用的第一阶段模型输出。 |
 
 ## 子实验 1：轨道真实性验证
@@ -188,6 +194,37 @@ ratio_p50_user = P50_RTT_user_sim / P50_RTT_RIPE
 ```
 
 这样可以避免把两种不同测量点混在一起：RIPE Atlas 是 Starlink 用户接入网到公共目标的端到端 ping，内部 `route_latency_ms` 是模型业务在星座中的路径时延。前者用于外部真实性量级验证，后者用于解释星座内部业务压力、拥塞和长路径负载。
+
+## 子实验 5：内部状态可信性审计
+
+这一子实验用于补强外部公开数据无法直接覆盖的部分。真实 Starlink/LEO 运营商通常不会公开逐星 CPU、电池能量、队列长度、缓存占用、星间链路真实占用率和 INT 缓冲状态，因此这些变量不能通过外部网站逐点对比。项目采用的处理方式是把它们定义为“仿真潜变量”，并用可复算的物理公式、边界条件、拓扑约束和输入响应关系进行审计。
+
+运行命令：
+
+```bash
+npm run experiment1:internal-plausibility -- --out reports/experiment1-satellite-data-authenticity
+```
+
+核心检查包括：
+
+1. 资源边界：`cpu_percent`、分项 CPU、`energy_wh`、`state_of_charge` 必须位于合法范围内。
+2. CPU 公式：`cpu = clip(compute_cpu + task_traffic_cpu + forwarding_cpu + queue_cpu, 0, 100)`。
+3. 空业务约束：无任务、无转发、无队列节点的 CPU 必须接近 0。
+4. 太阳能发电：`P_solar = solar_exposure * I_sun * A_sa * eta_sa`。
+5. 电池更新：`E(t+Δt)=clip(E(t)+P_net*Δt,E_min,E_bat,max)`。
+6. 净功率：`P_net = eta_ch*max(P_solar-P_load,0) - max(P_load-P_solar,0)/eta_dis`。
+7. 链路约束：断开链路不能承载业务，路由任务不能使用断开链路。
+8. 链路公式：`utilization = carried_traffic / bandwidth`，`queue_latency_ms = queued_MB * 8 * 1000 / effective_capacity_Mbps`。
+9. 路由公式：`route_latency = Σ link_latency`。
+10. 输入响应：业务总负载应与平均 CPU 正相关，光照面净功率应显著高于阴影面。
+
+当前正式实验输出中，该审计推断电池容量为 `1200 Wh`，太阳翼峰值发电为约 `762.16 W`，时间片长度为 `5 min`，并对 23 个检查项全部通过。这个结论的正确表述是：
+
+> 模型内部状态满足公式一致性、物理边界、拓扑约束和业务/光照输入响应关系，因此可以作为 INT/INT-MC 遥测算法评估的仿真真值。
+
+不能写成：
+
+> 模型已经获得或复刻了 Starlink 运营商内部 CPU、电池、队列和链路占用真实遥测。
 
 ## 论文表述建议
 

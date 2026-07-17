@@ -1,0 +1,28 @@
+{
+  "schema": "int-telemetry-experiment14b-v2-mlab-query-correction-addendum/v1",
+  "status": "pre-registered-before-gp0-and-future-mlab-results",
+  "reason": "The NDT unified view exposes node._Instruments as a scalar protocol identifier. The frozen parent runner used an array UNNEST expression and must be corrected before any future M-Lab values are queried.",
+  "official_table": "measurement-lab.ndt.unified_downloads",
+  "superseded_predicate": "'ndt7' IN UNNEST(node_instruments)",
+  "replacement_predicate": "node._Instruments = 'ndt7'",
+  "required_partition_filter": "date must cover the frozen GP0 topology interval",
+  "official_evidence": [
+    {
+      "url": "https://www.measurementlab.net/tests/ndt/views/migrate/",
+      "claim": "node._Instruments identifies one of web100, tcpinfo, or ndt7; a.MeanThroughputMbps and a.MinRTT are the unified download metrics."
+    },
+    {
+      "url": "https://www.measurementlab.net/blog/most-ndt-clients-migrated-to-ndt7/",
+      "claim": "The official example compares node._Instruments directly with scalar string values."
+    }
+  ],
+  "causality_gates": {
+    "freeze_before_gp0": true,
+    "apply_after_gp0_lock": true,
+    "apply_before_mlab_query_or_import": true,
+    "future_result_values_observed_by_freeze": 0,
+    "test_values_used_for_fit": 0,
+    "post_test_parameter_updates": 0
+  },
+  "overwrite_policy": "The parent-generated query may be replaced exactly once before any M-Lab result lock; future result or import artifacts may never be overwritten."
+}

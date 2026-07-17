@@ -1,0 +1,57 @@
+{
+  "schema": "int-telemetry-experiment14b-v2-protocol/v1",
+  "experiment_id": "experiment14b-prospective-external-validation-v2-utc-corrected",
+  "title": "Experiment 14B v2 UTC-corrected: immutable fresh orbit and strictly paired external validation",
+  "revision": "utc-epoch-corrected-rerun",
+  "utc_epoch_correction_path": "scripts/experiments/experiment14b-v2-utc-epoch-correction.json",
+  "status": "pre-registered-before-gp0-and-future-external-acquisition",
+  "claim_boundary": "Validate public orbit and user-visible performance only. CPU, battery energy, and queues remain physics-driven simulation latent variables for relative algorithm evaluation.",
+  "parent_protocol_path": "scripts/experiments/experiment14b-protocol.json",
+  "orbit": {
+    "minimum_source_update_hours_after_freeze": 2,
+    "future_validation_delay_hours_after_gp0": 24,
+    "maximum_logical_snapshots": 2,
+    "require_same_gp1_source_family": true,
+    "require_changed_source_hash": true
+  },
+  "mlab_strict": {
+    "official_table": "measurement-lab.ndt.unified_downloads",
+    "source_asn": 14593,
+    "protocol": "ndt7",
+    "minimum_exact_pairs": 20,
+    "maximum_topology_time_offset_seconds": 150,
+    "minimum_publication_delay_hours": 24,
+    "required_columns": [
+      "uuid",
+      "test_time",
+      "data_source",
+      "client_asn",
+      "client_city",
+      "client_country_code",
+      "lat",
+      "lon",
+      "server_id",
+      "server_city",
+      "server_country_code",
+      "server_latitude_deg",
+      "server_longitude_deg",
+      "download_throughput_mbps",
+      "download_latency_ms"
+    ],
+    "frozen_calibration_path": "reports/experiment14b-prospective-external-validation/user-performance/calibration.json"
+  },
+  "ripe_strict": {
+    "minimum_exact_pairs": 20,
+    "measurement_hours": 4,
+    "lock_window_before_measurement_creation": true
+  },
+  "radar": {
+    "prospective_test_hours": 48,
+    "calibration_hours": 168
+  },
+  "causality": {
+    "allow_external_test_values_for_fit": false,
+    "allow_external_test_values_for_interval_calibration": false,
+    "allow_post_test_parameter_updates": false
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "schema": "int-telemetry-experiment14b-v2-completion-addendum/v1",
+  "experiment_id": "experiment14b-prospective-external-validation-v2-utc-corrected",
+  "canonical_final_audit": "reports/experiment14b-prospective-external-validation-v2-utc-corrected/strict-completion-addendum/audit.json",
+  "ripe_source_equivalence": {
+    "accepted": [
+      "project-created-fixed-ripe-anchor-measurement",
+      "pre-registered-public-ongoing-fixed-ripe-anchor-measurement"
+    ],
+    "required_target_semantics": "fixed-ripe-atlas-anchor",
+    "minimum_strict_pairs": 20,
+    "rejected": ["public-anycast-proxy", "unknown-target-pop", "post-result-source-selection"]
+  },
+  "required_checks": [
+    "all_freezes_integral",
+    "gp0_fresh_and_locked",
+    "gp1_blind_validation",
+    "radar_prospective_holdout",
+    "mlab_minimum_strict_pairs",
+    "ripe_minimum_strict_pairs",
+    "strict_metric_scores_complete",
+    "test_target_fit_count_zero",
+    "post_test_updates_zero",
+    "ns3_system_cross_validation",
+    "internal_state_claim_boundary"
+  ],
+  "claim_boundary": "Completion validates public orbit evolution and user-visible RTT/throughput within the frozen window. It does not validate operator-internal CPU, battery, queue, routing, or ISL scheduling ground truth."
+}

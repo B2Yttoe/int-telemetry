@@ -71,4 +71,12 @@ const timezoneSafe = compareOrbitEpochs({
 });
 assert.equal(timezoneSafe.rows[0].model_epoch, "2026-07-06T16:51:50.622Z");
 
+const rawValidation = compareOrbitEpochs({
+  modelSnapshot: snapshot(81.2078, "2026-07-02T16:51:50.622336"),
+  validationSnapshot: [omm(81.2078, "2026-07-06T16:51:50.622336")],
+  comparisonTime: fixtureEpoch,
+});
+assert.equal(rawValidation.rows[0].validation_epoch, "2026-07-06T16:51:50.622Z");
+assert.equal(rawValidation.rows[0].epoch_separation_hours, 96);
+
 console.log("Experiment 9 cross-epoch orbit tests passed.");
